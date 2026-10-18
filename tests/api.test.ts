@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createApiHandler, MAX_JSON_BYTES } from '../server/api';
+import type { ApiErrorBody, RespondResult } from '../shared/types';
+
+const errorBody = async (response: Response): Promise<ApiErrorBody> => await response.json() as ApiErrorBody;
+const replyBody = async (response: Response): Promise<RespondResult> => await response.json() as RespondResult;
 
 const spokenReply = {
   reply: '听起来这件事让你有些疲惫。你想继续说说吗？',
@@ -44,7 +48,7 @@ describe('WhiteMood real-provider API boundary', () => {
     const fetch = mockProvider();
     const response = await createApiHandler({}, { fetch })(makeRequest());
     expect(response.status).toBe(503);
-    expect((await response.json()).error.code).toBe('NOT_CONFIGURED');
+    expect((await errorBody(response)).error.code).toBe('NOT_CONFIGURED');
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -54,7 +58,7 @@ describe('WhiteMood real-provider API boundary', () => {
     for (const headers of disallowedHeaders) {
       const response = await handler(makeRequest('/api/respond', respondInput, headers));
       expect(response.status).toBe(403);
-      expect((await response.json()).error.code).toBe('ORIGIN_NOT_ALLOWED');
+      expect((await errorBody(response)).error.code).toBe('ORIGIN_NOT_ALLOWED');
     }
     expect(fetch).not.toHaveBeenCalled();
   });
@@ -64,7 +68,7 @@ describe('WhiteMood real-provider API boundary', () => {
     const response = await handler(makeRequest('/api/respond', respondInput, { origin: 'http://127.0.0.1:5173' }));
     expect(response.status).toBe(200);
     expect(response.headers.get('access-control-allow-origin')).toBeNull();
-    expect((await response.json()).reply).toBe(spokenReply.reply);
+    expect((await replyBody(response)).reply).toBe(spokenReply.reply);
   });
 
   it('requires JSON, validates language, schemas, finite numbers and size caps', async () => {
@@ -110,11 +114,11 @@ describe('WhiteMood real-provider API boundary', () => {
     const fetch = mockProvider({ ...spokenReply, speech: { style: 'steady', rate: 50, pitch: -2, pauseMs: 10 } });
     const handler = createApiHandler({ apiKey: 'test' }, { fetch });
     const response = await handler(makeRequest());
-    expect((await response.json()).speech).toEqual({ style: 'steady', rate: 1.15, pitch: 0.8, pauseMs: 150 });
+    expect((await replyBody(response)).speech).toEqual({ style: 'steady', rate: 1.15, pitch: 0.8, pauseMs: 150 });
     fetch.mockImplementationOnce(async () => completion({ ...spokenReply, speech: { style: 'manic' } }));
     const invalid = await handler(makeRequest());
     expect(invalid.status).toBe(502);
-    expect((await invalid.json()).error.code).toBe('INVALID_PROVIDER_RESPONSE');
+    expect((await errorBody(invalid)).error.code).toBe('INVALID_PROVIDER_RESPONSE');
     fetch.mockImplementationOnce(async () => completion(spokenReply, 'length'));
     expect((await handler(makeRequest())).status).toBe(502);
   });
@@ -130,7 +134,7 @@ describe('WhiteMood real-provider API boundary', () => {
     expect(limited.status).toBe(429); expect(limited.headers.get('retry-after')).toBe('42');
     expect(await limited.json()).toEqual({ error: { code: 'PROVIDER_RATE_LIMITED', message: 'The AI service limit has been reached. Please wait before retrying.', retryAfter: 42 } });
     const unauthorized = await handler(makeRequest());
-    expect(unauthorized.status).toBe(503); expect((await unauthorized.json()).error.code).toBe('PROVIDER_CONFIGURATION');
+    expect(unauthorized.status).toBe(503); expect((await errorBody(unauthorized)).error.code).toBe('PROVIDER_CONFIGURATION');
   });
 
   it('applies a per-IP process-local limit, not a global claimed distributed limit', async () => {
@@ -153,7 +157,7 @@ describe('WhiteMood real-provider API boundary', () => {
       const pending = createApiHandler({ apiKey: 'test', timeoutMs: 100 }, { fetch })(makeRequest());
       await vi.advanceTimersByTimeAsync(150);
       const response = await pending;
-      expect(response.status).toBe(504); expect((await response.json()).error.code).toBe('PROVIDER_TIMEOUT');
+      expect(response.status).toBe(504); expect((await errorBody(response)).error.code).toBe('PROVIDER_TIMEOUT');
     } finally { vi.useRealTimers(); }
   });
 
@@ -168,7 +172,7 @@ describe('WhiteMood real-provider API boundary', () => {
       const pending = createApiHandler({ apiKey: 'test', timeoutMs: 100 }, { fetch })(makeRequest());
       await vi.advanceTimersByTimeAsync(150);
       const response = await pending;
-      expect(response.status).toBe(504); expect((await response.json()).error.code).toBe('PROVIDER_TIMEOUT');
+      expect(response.status).toBe(504); expect((await errorBody(response)).error.code).toBe('PROVIDER_TIMEOUT');
     } finally { vi.useRealTimers(); }
   });
 
@@ -186,7 +190,7 @@ describe('WhiteMood real-provider API boundary', () => {
     const pending = createApiHandler({ apiKey: 'test' }, { fetch })(request);
     await providerStarted; abort.abort();
     const response = await pending;
-    expect(response.status).toBe(499); expect((await response.json()).error.code).toBe('REQUEST_ABORTED');
+    expect(response.status).toBe(499); expect((await errorBody(response)).error.code).toBe('REQUEST_ABORTED');
   });
 
   it('forwards validated in-memory PCM WAV to the official transcription endpoint', async () => {

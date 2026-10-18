@@ -1,39 +1,37 @@
-# WhiteMood
+# WhiteMood 在线版
 
-面向双相情感障碍患者的通话式 AI 陪伴研究原型。中文 / English / 한국어。
+线上地址：https://whitemood.rich-925.chatgpt.site
 
-**点一次开始通话，自然说话，自动接话，随时挂断。** 音色、语速、基础音高和句间停顿由系统选择，不要求用户配置语音参数。文字输入、字幕、记忆与隐私管理作为备选入口。
+本站沿用 WhiteMood 语音 MVP，使用 Sites 的 HTTPS、公开注册及 WhiteMood 账号登录和 Cloudflare Workers。以云朵为 AI 形象，采用浅蓝与白色的原生 React 界面；CV 仍由张博士负责。
 
-本仓库先实现语音、对话与记忆。**CV 由张博士负责**；目前仅提供真实接入接口，没有摄像头采集、表情模型或模拟 CV 观测。
+## 部署运行
 
-## 本地运行
+- 生产密钥在 Sites runtime secrets 中配置，不在源文件、本地构建或网页中。
+- `GROQ_API_KEY`：Groq 服务端密钥。
+- `SITE_ORIGIN`：本站唯一 HTTPS origin，无结尾斜杠。
+- `SESSION_SECRET`：服务端匿名 cookie 签名密钥，随机生成后保存在 runtime secret。
+- `GROQ_CHAT_MODEL` / `GROQ_STT_MODEL`：可选模型 ID。
+- 无需 ChatGPT 账号。只用 ID 和密码注册；ID 不区分大小写，数据库唯一约束防止并发重名。
+- 密码使用独立随机盐和 native scrypt（N=32768、r=8、p=3）哈希；数据库不保存明文密码。
+- 登录使用 12 小时 HttpOnly、Secure、SameSite Cookie，数据库只保存令牌哈希。退出即时撤销当前会话。
+- AI 接口逐次验证 WhiteMood 登录，D1 保存账号/全站的窗口调用次数；不保存音频、对话文字或 IP。
+- 全站限额为每分钟 12 次、每日 200 次 AI 请求；单账号每分钟 10 次、每日 80 次。转写、回应与摘要分别计数；服务商自身限额仍有效。
+- 记忆与记忆同意设置按稳定账号 UUID 在当前浏览器中隔离，不做跨设备同步。退出后通话卸载，停止麦克风。新域名有独立的浏览器存储，不迁移旧 localhost 数据。
 
-准备 Node.js 24 与 pnpm 11.25.0。代码已包含依赖锁文件。
+本地构建与测试需要 Node 24 和 pnpm 11.25.0：
 
 ```bash
-git clone https://github.com/Yuri925830/WhiteMood.git
-cd WhiteMood
-npm install --global pnpm@11.25.0
 pnpm install --frozen-lockfile
-cp .env.example .env
-```
-
-在 `.env` 中填入自己的 `GROQ_API_KEY`，然后运行：
-
-```bash
-pnpm dev
-```
-
-打开终端显示的 `http://127.0.0.1:5173`。API 服务使用 `127.0.0.1:8787`。麦克风只在点击开始后申请；初次允许权限即可连续按话轮交流。推荐先使用耳机测试打断。
-
-构建后可用同一个本机服务运行网页和 API：
-
-```bash
+pnpm test
+pnpm typecheck
 pnpm build
-pnpm start
 ```
 
-此时打开 `http://127.0.0.1:8787`。开发和构建启动均需保留完整依赖。`.env` 不提交 GitHub，私钥不使用 `VITE_` 前缀。未填密钥时网页会真实显示服务未就绪；不会播放预制对话或生成假回应。
+Sites 发布使用官方 source/build helper，保留 `build/sites-vite-plugin.ts` 与 `build/sites-worker.ts`。`server/hosted.ts` 复用标准 Fetch API；`server/index.ts` 仅为原本地 Node 适配器，不在生产运行。
+
+`pnpm dev` 提供本地框架预览，未启用模拟登录。网站直接公开展示自己的 ID/密码注册与登录页，不跳转 ChatGPT。Groq 调用仍受账号免费额度影响，无付费自动回退。
+
+## 产品及模块说明
 
 ## 已实现的链路
 
@@ -56,7 +54,7 @@ pnpm start
 - 关闭记忆后停止后续保存和历史引用；旧记录仍可在“记忆与隐私”中查看或删除。
 - 可直接说“不要保存这次通话”“don't save this call”“이번 통화는 저장하지 마세요”，删除已保存的当前通话，并停止保存本次剩余内容。其他涉及具体事实的遗忘要求请通过记忆管理执行，避免误删。
 
-存储限于此浏览器、此网站来源；不是云备份，不跨设备同步，不按账号隔离。清除浏览器站点数据会丢失记录，共用同一浏览器配置的人可能看到记录。当前没有登录或假登录。
+记忆按登录账号在此浏览器、此网站来源中隔离，不跨设备同步；云端账号数据库不保存对话记录。清除浏览器站点数据会丢失本地记忆。浏览器本地存储并非加密保险箱，拥有该浏览器或设备管理权限的人仍可能读取站点数据。
 
 ## 数据与免费额度
 
@@ -79,16 +77,3 @@ pnpm start
 
 张博士从 [CV 接入说明](docs/CV_HANDOFF.md) 开始；无需改录音与播音模块。当前只取最近有效观测，尚未实现严格音画时序对齐。
 
-## 验证与下一阶段
-
-```bash
-pnpm typecheck
-pnpm test
-pnpm build
-```
-
-测试使用隔离的依赖替身与浏览器数据库实现检查状态机、取消、真实已播上下文、WAV、VAD、记忆删除及 API 校验；替身仅在测试中使用。它们不能证明真实 API 的语音质量或患者效果。[验收记录](docs/ACCEPTANCE.md) 区分已检查项与仍需实机验证的项目。
-
-原方案中的 Cloudflare Workers、Supabase 登录、账号隔离和浏览器关闭后的云端任务尚未实现。这一版提供本机演示链路；后续增加真实身份与数据隔离后再提供远程多用户服务。后端绑定回环地址并验证 Host/Origin；不要直接改为公网无认证 API 中转。
-
-WhiteMood 明确为 AI 陪伴原型；不输出医疗诊断、调药建议或疗效承诺。AI 的自然感来自倾听、回应和上下文连续性，不能冒充真人。

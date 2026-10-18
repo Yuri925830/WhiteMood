@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
-import { WhiteMoodController } from './controller';
 import type { AppModel } from './model';
+import { createAccountController } from './accountController';
 
-export function useWhiteMood(): AppModel {
-  const controller = useMemo(() => new WhiteMoodController(), []);
+export function useWhiteMood(userId: string): AppModel {
+  const controller = useMemo(() => createAccountController(userId), [userId]);
   const state = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
   useEffect(() => {
     void controller.initialize();

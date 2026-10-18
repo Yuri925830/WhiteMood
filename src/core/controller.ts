@@ -17,6 +17,7 @@ type SpeechPort = Pick<SpeechOutput, 'speak' | 'cancel'>;
 type CaptureCallbacks = ConstructorParameters<typeof VoiceCapture>[0];
 
 export interface ControllerDependencies {
+  settingsKey: string;
   api: typeof api;
   store: MemoryStore;
   speech: SpeechPort;
@@ -55,7 +56,7 @@ export class WhiteMoodController {
   private readonly deps: ControllerDependencies;
 
   constructor(dependencies: Partial<ControllerDependencies> = {}) {
-    this.deps = { api, store: new MemoryStore(), speech: new SpeechOutput(), capture: (callbacks, settings) => new VoiceCapture(callbacks, { silenceMs: settings.silenceMs }), voices: getAvailableVoices, ...dependencies };
+    this.deps = { settingsKey: 'whitemood-settings-v1', api, store: new MemoryStore(), speech: new SpeechOutput(), capture: (callbacks, settings) => new VoiceCapture(callbacks, { silenceMs: settings.silenceMs }), voices: getAvailableVoices, ...dependencies };
   }
 
   getSnapshot = (): ControllerState => this.state;
@@ -66,7 +67,7 @@ export class WhiteMoodController {
   async initialize(): Promise<void> {
     const lifecycle = ++this.lifecycle; this.attached = true;
     try {
-      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('whitemood-settings-v1') : null;
+      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(this.deps.settingsKey) : null;
       if (raw) {
         const parsed: Partial<UserSettings> = JSON.parse(raw);
         // Voice delivery is automatic; obsolete device-specific tuning must not override it.
@@ -128,7 +129,7 @@ export class WhiteMoodController {
       if (!settings.memoryEnabled) this.retainCall = false;
     }
     this.patch({ settings }); this.capture?.setSilenceMs(settings.silenceMs); this.refreshVoices();
-    try { localStorage.setItem('whitemood-settings-v1', JSON.stringify(settings)); } catch { /* memory itself has explicit failure handling */ }
+    try { localStorage.setItem(this.deps.settingsKey, JSON.stringify(settings)); } catch { /* memory itself has explicit failure handling */ }
     if (!this.active && settings.memoryEnabled) void this.runMaintenance();
   };
   setLanguage = (language: Language) => { if (!this.active) this.updateSettings({ language, voiceURI: '' }); };
@@ -379,7 +380,7 @@ export class WhiteMoodController {
     try { await this.persistQueue; await this.deps.store.clear(); }
     catch { this.patch({ error: 'storage_error' }); return; }
     this.patch({ settings: { ...this.state.settings, memoryEnabled: false } });
-    try { localStorage.setItem('whitemood-settings-v1', JSON.stringify(this.state.settings)); } catch { /* no persisted setting */ }
+    try { localStorage.setItem(this.deps.settingsKey, JSON.stringify(this.state.settings)); } catch { /* no persisted setting */ }
     await this.reloadMemory();
   };
 

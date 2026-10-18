@@ -4,13 +4,22 @@ export class ApiError extends Error {
   constructor(public code: string, public retryAfter = 0) { super(code); this.name = 'ApiError'; }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, init: RequestInit = {}, sessionRefreshed = false): Promise<T> {
+  init.signal?.throwIfAborted();
   let response: Response;
   try { response = await fetch(path, { ...init, credentials: 'same-origin' }); }
   catch (error) { if ((error as Error).name === 'AbortError') throw error; throw new ApiError('network'); }
   if (!response.ok) {
     const body = await response.json().catch(() => null) as ApiErrorBody | null;
     const code = body?.error?.code?.toLowerCase() ?? (response.status === 429 ? 'rate_limited' : 'provider_error');
+    if (response.status === 401 && code === 'auth_required' && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('whitemood:auth-required'));
+    }
+    if (response.status === 401 && code === 'session_required' && path !== '/api/health' && !sessionRefreshed) {
+      init.signal?.throwIfAborted();
+      await request<ServiceHealth>('/api/health', { signal: init.signal }, true);
+      return request<T>(path, init, true);
+    }
     throw new ApiError(code, body?.error?.retryAfter ?? Number(response.headers.get('retry-after') || 0));
   }
   return await response.json() as T;
@@ -35,7 +44,7 @@ export function errorKey(error: unknown): string {
   if (error instanceof ApiError) {
     if (/config|unavailable|missing_key|not_configured/.test(error.code)) return 'service_unavailable';
     if (/rate|quota/.test(error.code)) return 'rate_limited';
-    if (/network|timeout/.test(error.code)) return 'network';
+    if (/network|timeout|session_required|auth_required/.test(error.code)) return 'network';
     return 'provider_error';
   }
   if (error instanceof Error) {

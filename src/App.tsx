@@ -2,9 +2,10 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import type { AppModel } from './core/model';
 import type { ChatMessage, Language, SessionRecord } from '../shared/types';
 import { errorText, languageNames, localeNames, translations } from './i18n';
+import Cloud from './Cloud';
 import './styles.css';
 
-type IconName = 'mic' | 'mic-off' | 'phone' | 'phone-end' | 'memory' | 'close' | 'arrow' | 'text' | 'check' | 'pause' | 'leaf' | 'refresh' | 'chevron' | 'trash' | 'edit';
+type IconName = 'mic' | 'mic-off' | 'phone' | 'phone-end' | 'memory' | 'close' | 'arrow' | 'text' | 'check' | 'pause' | 'cloud' | 'refresh' | 'chevron' | 'trash' | 'edit';
 
 function Icon({ name, size = 20, ...props }: { name: IconName; size?: number; className?: string }) {
   const paths: Record<IconName, ReactNode> = {
@@ -18,17 +19,13 @@ function Icon({ name, size = 20, ...props }: { name: IconName; size?: number; cl
     text: <><rect x="3" y="4" width="18" height="14" rx="3" /><path d="m7 18-2 3M7 9h10M7 13h6" /></>,
     check: <path d="m5 12 4 4L19 6" />,
     pause: <><path d="M9 5v14M15 5v14" /></>,
-    leaf: <><path d="M19.5 4.5C10 2 3.2 6.5 5.5 14c2 6.5 12.5 5.5 14-9.5ZM5 20l9-10" /></>,
+    cloud: <path d="M6 18a4.5 4.5 0 0 1-.7-8.9 5.5 5.5 0 0 1 10.6-2A5.5 5.5 0 0 1 18 18H6Z" />,
     refresh: <><path d="M20 7v5h-5M4 17v-5h5M19.5 11A7.5 7.5 0 0 0 6 6.5L4 9M4.5 13A7.5 7.5 0 0 0 18 17.5l2-2.5" /></>,
     chevron: <path d="m8 10 4 4 4-4" />,
     trash: <><path d="M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7" /></>,
     edit: <><path d="m15 4 5 5M4 20l5-1L21 7l-4-4L5 15l-1 5Z" /></>,
   };
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>{paths[name]}</svg>;
-}
-
-function BrandMark() {
-  return <svg className="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M20 20C10 21 6 15 9 10c4-6 11-2 11 10Z" fill="currentColor" opacity=".8"/><path d="M20 20C19 10 25 6 30 9c6 4 2 11-10 11Z" fill="currentColor"/><path d="M20 20c10-1 14 5 11 10-4 6-11 2-11-10Z" fill="currentColor" opacity=".65"/><path d="M20 20c1 10-5 14-10 11-6-4-2-11 10-11Z" fill="currentColor" opacity=".9"/></svg>;
 }
 
 function Modal({ title, eyebrow, children, onClose, closeLabel, wide = false }: { title: string; eyebrow: string; children: ReactNode; onClose: () => void; closeLabel: string; wide?: boolean }) {
@@ -85,7 +82,7 @@ function Memory({ model, active, close }: { model: AppModel; active: boolean; cl
     </div>
     {model.memoryBusy && <p className="memory-status-note" role="status">{t.memoryBusy}</p>}
     <div className="memory-section-heading"><h3>{t.memoryItems}</h3><span className="count-tag">{model.memories.length}</span></div>
-    {model.memories.length === 0 ? <div className="empty-card"><Icon name="leaf" size={27} /><h4>{t.memoryEmpty}</h4><p>{t.memoryEmptyHint}</p></div> : <div className="memory-items">{model.memories.map(memory => <article className="memory-item" key={memory.id}>
+    {model.memories.length === 0 ? <div className="empty-card"><Cloud className="empty-cloud" /><h4>{t.memoryEmpty}</h4><p>{t.memoryEmptyHint}</p></div> : <div className="memory-items">{model.memories.map(memory => <article className="memory-item" key={memory.id}>
       <span className="kind-tag">{t[memory.kind === 'self_report' ? 'selfReport' : memory.kind]}</span>
       {editing === memory.id ? <form onSubmit={async event => { event.preventDefault(); if (draft.trim()) { await model.editMemory(memory.id, draft.trim()); setEditing(null); } }} className="edit-memory-form"><textarea autoFocus aria-label={t.editLabel} maxLength={2000} value={draft} onChange={event => setDraft(event.target.value)} /><div className="inline-actions"><button className="small-button" type="submit" disabled={!draft.trim() || model.memoryBusy}>{t.save}</button><button className="text-button" type="button" onClick={() => setEditing(null)}>{t.cancel}</button></div></form> : <p>{memory.text}</p>}
       <div className="memory-item-footer"><span>{t.source} · {memory.sourceSessionIds.length} {t.conversation}</span><div className="inline-actions"><button className="icon-button" disabled={model.memoryBusy || editing === memory.id} aria-label={`${t.edit}: ${memory.text}`} onClick={() => { setEditing(memory.id); setDraft(memory.text); }}><Icon name="edit" size={16} /></button><button className="icon-button subtle-danger" disabled={model.memoryBusy} aria-label={`${t.delete}: ${memory.text}`} onClick={() => { if (window.confirm(t.deleteMemoryConfirm)) void model.deleteMemory(memory.id); }}><Icon name="trash" size={16} /></button></div></div>
@@ -131,7 +128,7 @@ export default function App({ model }: { model: AppModel }) {
 
   return <div className="app-shell">
     <header className="header">
-      <a className="brand" href="#main" aria-label="WhiteMood"><BrandMark /><span className="brand-type">WhiteMood<span>{t.brandNote}</span></span></a>
+      <a className="brand" href="#main" aria-label="WhiteMood"><Cloud className="brand-mark" /><span className="brand-type">WhiteMood<span>{t.brandNote}</span></span></a>
       <nav className="header-actions" aria-label={t.memoryPrivacy}>
         <label className="language-select"><span className="sr-only">{t.language}</span><select value={model.settings.language} disabled={active} onChange={event => model.setLanguage(event.target.value as Language)}>{Object.entries(languageNames).map(([code, name]) => <option key={code} value={code}>{name}</option>)}</select><Icon name="chevron" size={14} /></label>
         <span className="header-divider" />
@@ -141,12 +138,12 @@ export default function App({ model }: { model: AppModel }) {
 
     <main id="main" className={`main ${model.settings.captions ? 'with-transcript' : ''}`}>
       <section className="conversation-stage" aria-label={t.voiceLabel}>
-        <div className="stage-heading"><span className="eyebrow companion-label"><span className="tiny-flower">✳</span>{t.companion}</span><h1>{active ? t.activeTitle : t.heroTitle}</h1><p>{active ? t.activeSubtitle : t.heroSubtitle}</p></div>
+        <div className="stage-heading"><span className="eyebrow companion-label"><Icon name="cloud" size={17} />{t.companion}</span><h1>{active ? t.activeTitle : t.heroTitle}</h1><p>{active ? t.activeSubtitle : t.heroSubtitle}</p></div>
 
         <div className={`voice-visual visual-${model.status} ${model.muted ? 'visual-muted' : ''}`} style={{ '--level': level } as CSSProperties} aria-hidden="true">
-          <div className="visual-outer-ring" /><div className="visual-inner-ring" />
-          <div className="voice-sphere"><div className="sphere-core" /><svg className="sphere-petal" viewBox="0 0 90 90" fill="none"><path d="M45 45C19 48 10 30 20 20 33 7 48 21 45 45Z" fill="currentColor" opacity=".8"/><path d="M45 45C42 19 60 10 70 20 83 33 69 48 45 45Z" fill="currentColor"/><path d="M45 45c26-3 35 15 25 25-13 13-28-1-25-25Z" fill="currentColor" opacity=".65"/><path d="M45 45c3 26-15 35-25 25C7 57 21 42 45 45Z" fill="currentColor" opacity=".9"/></svg></div>
-          <span className="visual-dot dot-one" /><span className="visual-dot dot-two" />
+          <div className="cloud-sky" />
+          <Cloud className="hero-cloud" />
+          <div className="cloud-listening-lines"><span /><span /><span /></div>
         </div>
 
         <div className="call-status"><div className="status-line" role="status" aria-live="polite"><span className={`status-dot ${active ? 'is-active' : ''}`} />{status}</div><div className="status-meta">{active || model.elapsedSeconds > 0 ? <time aria-label={`${t.elapsed} ${duration}`}>{duration}</time> : <span>{t.aiLabel}</span>}</div></div>
@@ -169,7 +166,7 @@ export default function App({ model }: { model: AppModel }) {
       {model.settings.captions && <aside className="transcript-panel" aria-label={t.captions}><div className="transcript-heading"><div><span className="eyebrow">WHITE MOOD</span><h2>{t.captions}</h2></div><button className="icon-button" aria-label={t.hideCaptions} onClick={() => model.updateSettings({ captions: false })}><Icon name="close" size={18} /></button></div><MessageList messages={model.messages} language={model.settings.language} /></aside>}
     </main>
 
-    <footer className="footer"><div className="footer-values"><span><Icon name="leaf" size={15} />{t.paceShort}</span><span><Icon name="memory" size={15} />{t.memoryShort}</span><span><Icon name="pause" size={15} />{t.privacyShort}</span></div><p>{t.footer}</p><span className="footer-wordmark">WhiteMood</span></footer>
+    <footer className="footer"><div className="footer-values"><span><Icon name="cloud" size={15} />{t.paceShort}</span><span><Icon name="memory" size={15} />{t.memoryShort}</span><span><Icon name="pause" size={15} />{t.privacyShort}</span></div><p>{t.footer}</p><span className="footer-wordmark">WhiteMood</span></footer>
     {modal === 'memory' && <Memory model={model} active={active} close={() => setModal(null)} />}
   </div>;
 }
