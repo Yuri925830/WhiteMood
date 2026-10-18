@@ -1,9 +1,10 @@
-import type { CallStatus, ChatMessage, Language, MemoryItem, ServiceHealth, SessionRecord, UserSettings } from '../../shared/types';
+import type { CallStatus, ChatMessage, Language, MemoryItem, MicrophoneState, ServiceHealth, SessionRecord, UserSettings } from '../../shared/types';
 
 export interface AppModel {
   settings: UserSettings;
   status: CallStatus;
   level: number;
+  microphone: MicrophoneState;
   elapsedSeconds: number;
   messages: ChatMessage[];
   error: string | null;
@@ -18,6 +19,7 @@ export interface AppModel {
   updateSettings: (next: Partial<UserSettings>) => void;
   setLanguage: (language: Language) => void;
   startCall: () => Promise<void>;
+  restartMicrophone: () => Promise<void>;
   endCall: () => Promise<void>;
   toggleMute: () => void;
   stopSpeaking: () => void;

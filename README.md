@@ -1,8 +1,10 @@
-# WhiteMood 在线版
+# WhiteMood 语音陪伴
 
-线上地址：https://whitemood.rich-925.chatgpt.site
+正式入口：Cloudflare Pages 独立免费网址，待首次发布返回地址后记录。
 
-本站沿用 WhiteMood 语音 MVP，使用 Sites 的 HTTPS、公开注册及 WhiteMood 账号登录和 Cloudflare Workers。以云朵为 AI 形象，采用浅蓝与白色的原生 React 界面；CV 仍由张博士负责。
+Cloudflare 部署说明：[DEPLOY_CLOUDFLARE.md](DEPLOY_CLOUDFLARE.md)。
+
+本站使用 Cloudflare Workers、D1 与 WhiteMood 自有账号系统。Pages 提供独立免费入口，通过私有服务绑定接入应用。以云朵为 AI 形象，采用浅蓝与白色的原生 React 界面；CV 仍由张博士负责。
 
 ## 部署运行
 
@@ -12,7 +14,8 @@
 - `SESSION_SECRET`：服务端匿名 cookie 签名密钥，随机生成后保存在 runtime secret。
 - `GROQ_CHAT_MODEL` / `GROQ_STT_MODEL`：可选模型 ID。
 - 无需 ChatGPT 账号。只用 ID 和密码注册；ID 不区分大小写，数据库唯一约束防止并发重名。
-- 密码使用独立随机盐和 native scrypt（N=32768、r=8、p=3）哈希；数据库不保存明文密码。
+- 密码使用独立随机盐和 native scrypt（N=32768、r=8、p=3）哈希；数据库不保存明文密码。独立 Cloudflare 版本通过私有 Durable Object 执行计算，适配免费 Worker 的 CPU 限制，未降低哈希安全参数。
+- 账户设置可验证当前密码后修改 ID 或密码；保持 UUID，并撤销旧会话、签发当前新会话。
 - 登录使用 12 小时 HttpOnly、Secure、SameSite Cookie，数据库只保存令牌哈希。退出即时撤销当前会话。
 - AI 接口逐次验证 WhiteMood 登录，D1 保存账号/全站的窗口调用次数；不保存音频、对话文字或 IP。
 - 全站限额为每分钟 12 次、每日 200 次 AI 请求；单账号每分钟 10 次、每日 80 次。转写、回应与摘要分别计数；服务商自身限额仍有效。
@@ -30,6 +33,13 @@ pnpm build
 Sites 发布使用官方 source/build helper，保留 `build/sites-vite-plugin.ts` 与 `build/sites-worker.ts`。`server/hosted.ts` 复用标准 Fetch API；`server/index.ts` 仅为原本地 Node 适配器，不在生产运行。
 
 `pnpm dev` 提供本地框架预览，未启用模拟登录。网站直接公开展示自己的 ID/密码注册与登录页，不跳转 ChatGPT。Groq 调用仍受账号免费额度影响，无付费自动回退。
+
+## 侧边栏与录音反馈
+
+- 侧边栏包含语音陪伴、状态记录、记忆与隐私、账户设置。手机使用原生 dialog 抽屉，桌面固定展示。
+- 状态记录显示真实保存的对话摘要、自述、偏好、后续话题及来源原文，不生成诊断分数或虚构趋势。默认不保存，开启记忆后才整理。
+- 实际 PCM 驱动麦克风音量条和连接状态；静音、未收到输入、处理器停滞和系统中断分别提示，支持重新连接。
+- 低音量与持续环境噪声均纳入 VAD 回归；先发文字后可真正接通麦克风并继续同一对话。
 
 ## 产品及模块说明
 

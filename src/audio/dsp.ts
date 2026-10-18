@@ -5,7 +5,7 @@ interface AudioFrame { samples: Float32Array; rms: number; voiced: boolean }
 
 /** Small local signal gate. This measures voice activity, never emotions or diagnoses. */
 export class AdaptiveVad {
-  private noiseFloor = 0.004;
+  private noiseFloor = 0.0012;
   private preRoll: AudioFrame[] = [];
   private frames: AudioFrame[] = [];
   private candidateMs = 0;
@@ -15,6 +15,8 @@ export class AdaptiveVad {
   private muted = false;
   private speaking = false;
   private releaseMs: number;
+  private roomFrames: Array<{ rms: number; ms: number }> = [];
+  private roomDurationMs = 0;
   constructor(private readonly sampleRate: number, silenceMs = 1100) {
     this.releaseMs = clamp(silenceMs, 800, 3000);
   }
@@ -27,7 +29,7 @@ export class AdaptiveVad {
     this.silenceMs = 0; this.totalMs = 0; this.active = false;
   }
 
-  process(samples: Float32Array): { level: number; started: boolean; utterance?: UtteranceAudio } {
+  process(samples: Float32Array): { level: number; started: boolean; ended?: boolean; utterance?: UtteranceAudio } {
     let sum = 0, peak = 0, crossings = 0;
     for (let i = 0; i < samples.length; i++) {
       const value = Number.isFinite(samples[i]) ? samples[i] : 0;
@@ -35,17 +37,27 @@ export class AdaptiveVad {
       if (i && (value >= 0) !== (samples[i - 1] >= 0)) crossings++;
     }
     const rms = Math.sqrt(sum / Math.max(1, samples.length));
-    const level = clamp(rms * 6, 0, 1);
+    // A perceptual display makes ordinary laptop input visible without changing the recording.
+    const level = clamp(Math.sqrt(rms) * 2.4, 0, 1);
     if (this.muted || samples.length === 0) return { level: this.muted ? 0 : level, started: false };
     const ms = samples.length / this.sampleRate * 1000;
-    const threshold = Math.max(this.speaking ? 0.019 : 0.012, this.noiseFloor * (this.speaking ? 4.5 : 3.2));
+    // Learn the room's lower energy envelope even after a noisy start opened a candidate.
+    // Otherwise a steady fan above the initial threshold can hold a turn open for 45 seconds.
+    // Keep the first phrase in the pre-roll instead of discarding audio for a calibration step.
+    if (!this.speaking) {
+      this.roomFrames.push({ rms, ms }); this.roomDurationMs += ms;
+      while (this.roomDurationMs > 2400 && this.roomFrames.length > 1) this.roomDurationMs -= this.roomFrames.shift()!.ms;
+      if (this.roomDurationMs >= 600) {
+        const levels = this.roomFrames.map(frame => frame.rms).sort((a, b) => a - b);
+        this.noiseFloor = clamp(levels[Math.floor(levels.length * 0.15)], 0.0002, 0.05);
+      }
+    }
+    // The old fixed 0.012 RMS floor discarded quiet voices before STT ever ran.
+    // Compare to the local room floor instead, with a lower release threshold during a phrase.
+    const threshold = Math.max(this.speaking ? 0.012 : this.active ? 0.0018 : 0.0024, this.noiseFloor * (this.speaking ? 4.5 : this.active ? 1.7 : 1.9));
     // Reject near-DC rumbles and high frequency hiss in addition to requiring sustained energy.
     const zcr = crossings / samples.length;
     const voiced = rms > threshold && peak > threshold * 1.3 && zcr > 0.002 && zcr < 0.42;
-    if (!this.active && !voiced) {
-      const alpha = 1 - Math.exp(-ms / (rms > this.noiseFloor ? 1800 : 500));
-      this.noiseFloor = clamp(this.noiseFloor + alpha * (rms - this.noiseFloor), 0.0015, 0.05);
-    }
     const frame = { samples, rms, voiced };
     let started = false;
     if (!this.active) {
@@ -61,7 +73,7 @@ export class AdaptiveVad {
     }
     if (this.silenceMs < this.releaseMs && this.totalMs < 45000) return { level, started };
     const utterance = this.finish();
-    return { level, started, utterance };
+    return { level, started, ended: true, utterance };
   }
 
   private finish(): UtteranceAudio | undefined {
@@ -83,7 +95,7 @@ export class AdaptiveVad {
       peak = Math.max(peak, frame.rms);
     }
     this.reset();
-    if (voicedCount / this.sampleRate < 0.12 || count === 0) return undefined;
+    if (voicedCount / this.sampleRate < 0.12 || count === 0 || peak <= this.noiseFloor * 1.8) return undefined;
     return { samples, sampleRate: this.sampleRate, signals: {
       durationMs: count / this.sampleRate * 1000,
       voicedRatio: voicedCount / count,

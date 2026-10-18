@@ -1,0 +1,13 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "whitemood-yuri",
+  "account_id": "0e8e7f0429306f575ea08b61a74dfc87",
+  "pages_build_output_dir": "./public",
+  "compatibility_date": "2026-05-15",
+  "services": [
+    {
+      "binding": "WHITEMOOD_APP",
+      "service": "whitemood"
+    }
+  ]
+}

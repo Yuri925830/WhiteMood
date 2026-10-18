@@ -1,8 +1,13 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { AppModel } from './core/model';
 import type { ChatMessage, Language, SessionRecord } from '../shared/types';
 import { errorText, languageNames, localeNames, translations } from './i18n';
 import Cloud from './Cloud';
+import WorkspaceSidebar, { type WorkspaceView } from './WorkspaceSidebar';
+import { workspaceCopy } from './workspace-copy';
+import type { AccountControls, AccountUser } from './AuthGate';
+import AccountSettings from './AccountSettings';
+import VoiceDiagnostics from './VoiceDiagnostics';
 import './styles.css';
 
 type IconName = 'mic' | 'mic-off' | 'phone' | 'phone-end' | 'memory' | 'close' | 'arrow' | 'text' | 'check' | 'pause' | 'cloud' | 'refresh' | 'chevron' | 'trash' | 'edit';
@@ -28,18 +33,6 @@ function Icon({ name, size = 20, ...props }: { name: IconName; size?: number; cl
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>{paths[name]}</svg>;
 }
 
-function Modal({ title, eyebrow, children, onClose, closeLabel, wide = false }: { title: string; eyebrow: string; children: ReactNode; onClose: () => void; closeLabel: string; wide?: boolean }) {
-  const ref = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const dialog = ref.current;
-    if (dialog && !dialog.open) dialog.showModal();
-  }, []);
-  return <dialog ref={ref} className={`modal ${wide ? 'modal-wide' : ''}`} onClose={onClose} aria-labelledby="modal-title">
-    <div className="modal-heading"><div><span className="eyebrow">{eyebrow}</span><h2 id="modal-title">{title}</h2></div><button className="icon-button" onClick={onClose} aria-label={closeLabel}><Icon name="close" /></button></div>
-    {children}
-  </dialog>;
-}
-
 function MessageList({ messages, language, compact = false }: { messages: ChatMessage[]; language: Language; compact?: boolean }) {
   const t = translations[language];
   const last = useRef<HTMLDivElement>(null);
@@ -57,22 +50,22 @@ function MessageList({ messages, language, compact = false }: { messages: ChatMe
 
 function SessionCard({ session, model }: { session: SessionRecord; model: AppModel }) {
   const t = translations[model.settings.language];
-  const date = new Intl.DateTimeFormat(localeNames[model.settings.language], { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(session.startedAt);
+  const date = new Intl.DateTimeFormat(localeNames[model.settings.language], { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(session.startedAt);
   return <article className="session-card">
     <div className="session-card-heading"><div><time dateTime={new Date(session.startedAt).toISOString()}>{date}</time><span className="session-meta">{languageNames[session.language]} · {session.messages.length} {t.sessionMessages}</span></div><button className="icon-button subtle-danger" aria-label={`${t.delete} ${date}`} disabled={model.memoryBusy} onClick={() => { if (window.confirm(t.deleteSessionConfirm)) void model.deleteSession(session.id); }}><Icon name="trash" size={17} /></button></div>
     {session.summaryStatus === 'ready' && session.summary ? <>
       <p className="session-summary">{session.summary.text}</p>
       {([[t.summarySelf, session.summary.selfReported], [t.summaryPreferences, session.summary.preferences], [t.summaryFollowUp, session.summary.followUp]] as Array<[string, string[]]>).map(([title, items]) => items.length > 0 && <div className="summary-section" key={title}><h4>{title}</h4><ul>{items.map((item, index) => <li key={index}>{item}</li>)}</ul></div>)}
-    </> : <div className="summary-status"><span>{session.summaryStatus === 'pending' ? t.summaryPending : session.summaryStatus === 'failed' ? t.summaryFailed : t.summaryNone}</span>{session.summaryStatus === 'failed' && <button className="text-button" disabled={model.memoryBusy || !model.settings.memoryEnabled || !model.service?.configured} onClick={() => void model.retrySummary(session.id)}><Icon name="refresh" size={14} />{t.retrySummary}</button>}</div>}
+    </> : <div className="summary-status"><span>{!session.endedAt ? workspaceCopy[model.settings.language].activeRecord : session.summaryStatus === 'pending' ? t.summaryPending : session.summaryStatus === 'failed' ? t.summaryFailed : t.summaryNone}</span>{session.summaryStatus === 'failed' && <button className="text-button" disabled={model.memoryBusy || !model.settings.memoryEnabled || !model.service?.configured} onClick={() => void model.retrySummary(session.id)}><Icon name="refresh" size={14} />{t.retrySummary}</button>}</div>}
     <details className="session-transcript"><summary>{t.transcript}<Icon name="chevron" size={15} /></summary><MessageList messages={session.messages} language={model.settings.language} compact /></details>
   </article>;
 }
 
-function Memory({ model, active, close }: { model: AppModel; active: boolean; close: () => void }) {
+function Memory({ model, active }: { model: AppModel; active: boolean }) {
   const t = translations[model.settings.language];
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
-  return <Modal title={t.memoryPrivacy} eyebrow="WHITE MOOD" onClose={close} closeLabel={t.close} wide>
+  return <div className="memory-content">
     <p className="modal-intro">{t.memoryIntro}</p>
     <div className="privacy-controls">
       <label className="switch-field"><span><span className="field-title">{t.memory}</span><span className="field-help">{t.memoryHint}</span></span><input type="checkbox" role="switch" checked={model.settings.memoryEnabled} disabled={active && !model.settings.memoryEnabled} onChange={event => model.updateSettings({ memoryEnabled: event.target.checked })} /></label>
@@ -87,15 +80,29 @@ function Memory({ model, active, close }: { model: AppModel; active: boolean; cl
       {editing === memory.id ? <form onSubmit={async event => { event.preventDefault(); if (draft.trim()) { await model.editMemory(memory.id, draft.trim()); setEditing(null); } }} className="edit-memory-form"><textarea autoFocus aria-label={t.editLabel} maxLength={2000} value={draft} onChange={event => setDraft(event.target.value)} /><div className="inline-actions"><button className="small-button" type="submit" disabled={!draft.trim() || model.memoryBusy}>{t.save}</button><button className="text-button" type="button" onClick={() => setEditing(null)}>{t.cancel}</button></div></form> : <p>{memory.text}</p>}
       <div className="memory-item-footer"><span>{t.source} · {memory.sourceSessionIds.length} {t.conversation}</span><div className="inline-actions"><button className="icon-button" disabled={model.memoryBusy || editing === memory.id} aria-label={`${t.edit}: ${memory.text}`} onClick={() => { setEditing(memory.id); setDraft(memory.text); }}><Icon name="edit" size={16} /></button><button className="icon-button subtle-danger" disabled={model.memoryBusy} aria-label={`${t.delete}: ${memory.text}`} onClick={() => { if (window.confirm(t.deleteMemoryConfirm)) void model.deleteMemory(memory.id); }}><Icon name="trash" size={16} /></button></div></div>
     </article>)}</div>}
-    <div className="memory-section-heading"><h3>{t.sessions}</h3><span className="count-tag">{model.sessions.length}</span></div>
-    {model.sessions.length === 0 ? <p className="empty-session">{t.sessionsEmpty}</p> : <div className="session-list">{[...model.sessions].sort((a, b) => b.startedAt - a.startedAt).map(session => <SessionCard key={session.id} session={session} model={model} />)}</div>}
     {(model.sessions.length > 0 || model.memories.length > 0) && <div className="memory-delete-footer"><button className="text-button danger-text" disabled={model.memoryBusy} onClick={() => { if (window.confirm(t.clearConfirm)) void model.clearAllMemory(); }}><Icon name="trash" size={15} />{t.clearAll}</button></div>}
-  </Modal>;
+  </div>;
 }
 
-export default function App({ model }: { model: AppModel }) {
+function StatusRecords({ model, onManage }: { model: AppModel; onManage: () => void }) {
+  const t = workspaceCopy[model.settings.language];
+  const sessions = [...model.sessions].sort((a, b) => b.startedAt - a.startedAt);
+  return <>
+    <p className="workspace-page-intro">{t.recordsIntro}</p><p className="workspace-page-note">{t.recordsNote}<br />{t.storage}</p>
+    {!model.settings.memoryEnabled && <p className="memory-status-note">{t.memoryOff} <button className="text-button" onClick={onManage}>{t.manageMemory}</button></p>}
+    {sessions.length === 0 ? <div className="empty-card records-empty"><Cloud className="empty-cloud" /><h2>{t.emptyTitle}</h2><p>{t.emptyText}</p><button className="text-button" onClick={onManage}>{t.manageMemory}<Icon name="arrow" size={16} /></button></div> : <>
+      <dl className="records-stats"><div><dt>{t.saved}</dt><dd>{sessions.length}</dd></div><div><dt>{t.summarized}</dt><dd>{sessions.filter(item => item.summaryStatus === 'ready' && item.summary).length}</dd></div></dl>
+      <div className="saved-session-list">{sessions.map(session => <SessionCard key={session.id} session={session} model={model} />)}</div>
+    </>}
+  </>;
+}
+
+export default function App({ model, user, account }: { model: AppModel; user: AccountUser; account: AccountControls }) {
   const t = translations[model.settings.language];
-  const [modal, setModal] = useState<'memory' | null>(null);
+  const [view, setView] = useState<WorkspaceView>('call');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
+  const w = workspaceCopy[model.settings.language];
   const [text, setText] = useState('');
   const [textExpanded, setTextExpanded] = useState(false);
   const [sending, setSending] = useState(false);
@@ -105,10 +112,12 @@ export default function App({ model }: { model: AppModel }) {
   const configured = model.service?.configured === true;
   const duration = `${Math.floor(model.elapsedSeconds / 60).toString().padStart(2, '0')}:${Math.floor(model.elapsedSeconds % 60).toString().padStart(2, '0')}`;
   const level = Number.isFinite(model.level) ? Math.max(0, Math.min(1, model.level)) : 0;
-  const status = model.muted && model.status === 'listening' ? t.muted : t[model.status];
-  const canSend = configured && text.trim().length > 0 && !busy && !sending;
+  const status = model.status === 'listening' && model.microphone.status === 'starting' ? t.connecting : model.muted && model.status === 'listening' ? t.muted : t[model.status];
+  const canSend = !account.busy && configured && text.trim().length > 0 && !busy && !sending;
 
   useEffect(() => { document.documentElement.lang = model.settings.language; document.title = `WhiteMood · ${t.brandNote}`; }, [model.settings.language, t.brandNote]);
+
+  useEffect(() => { window.scrollTo({ top: 0, left: 0, behavior: 'instant' }); }, [view]);
 
   async function send() {
     if (!canSend) return;
@@ -126,17 +135,16 @@ export default function App({ model }: { model: AppModel }) {
     finally { setRefreshing(false); }
   }
 
-  return <div className="app-shell">
+  return <div className="workspace"><WorkspaceSidebar model={model} user={user} account={account} view={view} onNavigate={setView} open={menuOpen} onClose={closeMenu} /><div className="workspace-content"><div className="app-shell">
     <header className="header">
-      <a className="brand" href="#main" aria-label="WhiteMood"><Cloud className="brand-mark" /><span className="brand-type">WhiteMood<span>{t.brandNote}</span></span></a>
-      <nav className="header-actions" aria-label={t.memoryPrivacy}>
+      <div className="workspace-heading"><button className="sidebar-menu-button" aria-label={w.menu} aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><span>{w[view]}</span></div>
+      <nav className="header-actions" aria-label={t.language}>
         <label className="language-select"><span className="sr-only">{t.language}</span><select value={model.settings.language} disabled={active} onChange={event => model.setLanguage(event.target.value as Language)}>{Object.entries(languageNames).map(([code, name]) => <option key={code} value={code}>{name}</option>)}</select><Icon name="chevron" size={14} /></label>
-        <span className="header-divider" />
-        <button className="header-button" onClick={() => setModal('memory')} aria-label={t.memoryPrivacy}><Icon name="memory" size={18} /><span>{t.memoryPrivacy}</span></button>
       </nav>
     </header>
 
-    <main id="main" className={`main ${model.settings.captions ? 'with-transcript' : ''}`}>
+    {active && view !== 'call' && <div className="active-call-banner" role="status"><span>{w.ongoing}</span><button onClick={() => setView('call')}>{w.returnCall}</button><button onClick={() => void model.endCall()}>{t.end}</button></div>}
+    {view === 'call' ? <main id="main" className={`main ${model.settings.captions ? 'with-transcript' : ''}`}>
       <section className="conversation-stage" aria-label={t.voiceLabel}>
         <div className="stage-heading"><span className="eyebrow companion-label"><Icon name="cloud" size={17} />{t.companion}</span><h1>{active ? t.activeTitle : t.heroTitle}</h1><p>{active ? t.activeSubtitle : t.heroSubtitle}</p></div>
 
@@ -149,8 +157,10 @@ export default function App({ model }: { model: AppModel }) {
         <div className="call-status"><div className="status-line" role="status" aria-live="polite"><span className={`status-dot ${active ? 'is-active' : ''}`} />{status}</div><div className="status-meta">{active || model.elapsedSeconds > 0 ? <time aria-label={`${t.elapsed} ${duration}`}>{duration}</time> : <span>{t.aiLabel}</span>}</div></div>
 
         <div className="call-controls">
-          {active ? <><button className={`round-button ${model.muted ? 'is-muted' : ''}`} onClick={model.toggleMute} aria-label={model.muted ? t.unmute : t.mute} aria-pressed={model.muted} disabled={model.status === 'connecting'}><Icon name={model.muted ? 'mic-off' : 'mic'} size={22} /></button><button className="end-button" onClick={() => void model.endCall()}><Icon name="phone-end" size={22} /><span>{t.end}</span></button><button className="round-button" disabled={model.status !== 'speaking'} onClick={model.stopSpeaking} aria-label={t.interrupt}><Icon name="pause" size={22} /></button></> : <button className="start-button" disabled={!configured} onClick={() => void model.startCall()}><Icon name="phone" size={21} /><span>{t.start}</span><Icon name="arrow" size={19} /></button>}
+          {active ? <><button className={`round-button ${model.muted ? 'is-muted' : ''}`} onClick={model.toggleMute} aria-label={model.muted ? t.unmute : t.mute} aria-pressed={model.muted} disabled={model.status === 'connecting'}><Icon name={model.muted ? 'mic-off' : 'mic'} size={22} /></button><button className="end-button" onClick={() => void model.endCall()}><Icon name="phone-end" size={22} /><span>{t.end}</span></button><button className="round-button" disabled={model.status !== 'speaking'} onClick={model.stopSpeaking} aria-label={t.interrupt}><Icon name="pause" size={22} /></button></> : <button className="start-button" disabled={!configured || account.busy} onClick={() => void model.startCall()}><Icon name="phone" size={21} /><span>{t.start}</span><Icon name="arrow" size={19} /></button>}
         </div>
+
+        <VoiceDiagnostics model={model} active={active} />
 
         {!configured && !active && <div className="service-notice" role="status"><span>{model.service === null && !model.error ? t.serviceChecking : t.serviceOffline}</span>{(model.service !== null || model.error) && <><p>{t.serviceDetail}</p><button className="text-button" disabled={refreshing} onClick={() => void reconnect()}><Icon name="refresh" size={14} />{t.retry}</button></>}</div>}
 
@@ -164,9 +174,11 @@ export default function App({ model }: { model: AppModel }) {
       </section>
 
       {model.settings.captions && <aside className="transcript-panel" aria-label={t.captions}><div className="transcript-heading"><div><span className="eyebrow">WHITE MOOD</span><h2>{t.captions}</h2></div><button className="icon-button" aria-label={t.hideCaptions} onClick={() => model.updateSettings({ captions: false })}><Icon name="close" size={18} /></button></div><MessageList messages={model.messages} language={model.settings.language} /></aside>}
-    </main>
+    </main> : <main id="main" className="workspace-page" key={view}><span className="eyebrow">WHITE MOOD</span><h1>{view === 'records' ? w.recordsTitle : view === 'privacy' ? w.privacyTitle : w.accountTitle}</h1>
+      {view === 'records' ? <StatusRecords model={model} onManage={() => setView('privacy')} /> : view === 'privacy' ? <Memory model={model} active={active} /> : <AccountSettings user={user} language={model.settings.language} active={active} onUpdate={account.update} />}
+      {model.error && <div className="error-notice" role="alert"><div><strong>{t.errorTitle}</strong><p>{errorText(model.error, model.settings.language)}</p></div><button className="icon-button" aria-label={t.dismiss} onClick={model.clearError}><Icon name="close" size={16} /></button></div>}
+    </main>}
 
     <footer className="footer"><div className="footer-values"><span><Icon name="cloud" size={15} />{t.paceShort}</span><span><Icon name="memory" size={15} />{t.memoryShort}</span><span><Icon name="pause" size={15} />{t.privacyShort}</span></div><p>{t.footer}</p><span className="footer-wordmark">WhiteMood</span></footer>
-    {modal === 'memory' && <Memory model={model} active={active} close={() => setModal(null)} />}
-  </div>;
+  </div></div></div>;
 }

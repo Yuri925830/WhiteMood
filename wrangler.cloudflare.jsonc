@@ -1,0 +1,47 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "whitemood",
+  "account_id": "0e8e7f0429306f575ea08b61a74dfc87",
+  "main": "./dist/server/index.js",
+  "compatibility_date": "2026-05-15",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "no_bundle": true,
+  "workers_dev": true,
+  "preview_urls": false,
+  "vars": {
+    "REQUIRE_PASSWORD_HASHER": "true"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PASSWORD_HASHER",
+        "class_name": "PasswordHasher"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1-password-hasher",
+      "new_sqlite_classes": [
+        "PasswordHasher"
+      ]
+    }
+  ],
+  "assets": {
+    "directory": "./dist/client",
+    "binding": "ASSETS"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "whitemood",
+      "database_id": "83e99adf-87da-4bc5-a090-b52a94cea673",
+      "migrations_dir": "./drizzle"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

@@ -3,12 +3,16 @@ import { runWithConnectorBinding } from "../lib/connector-context";
 import type { ConnectorBinding } from "../lib/connector-contract.mjs";
 import { createApplicationApi } from "../server/applicationApi";
 
+export { PasswordHasher } from "../server/passwordHasher";
+
 const api = createApplicationApi();
 
 export default {
   async fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext<{ CONNECTORS?: ConnectorBinding }>) {
     const pathname = new URL(request.url).pathname;
     if (pathname === '/api' || pathname.startsWith('/api/')) return api(request, env);
+    // Service-bound Pages requests need an explicit path to the same static assets.
+    if (env.ASSETS && pathname !== '/' && ['GET', 'HEAD'].includes(request.method)) return env.ASSETS.fetch(request);
     let binding = ctx.props?.CONNECTORS;
     // Local preview emulates the same request-scoped capability. This branch and
     // the auxiliary service binding are absent from production builds.

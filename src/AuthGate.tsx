@@ -5,9 +5,16 @@ import Link from 'next/link';
 import type { Language } from '../shared/types';
 import { isValidAccountId, normalizeAccountId, validateCredentials } from './auth-validation';
 import Cloud from './Cloud';
+import type { AccountUpdateInput } from './AccountSettings';
 import './auth.css';
 
 export interface AccountUser { userId: string; id: string }
+export interface AccountControls {
+  busy: boolean;
+  error: string;
+  logout: () => Promise<void>;
+  update: (input: AccountUpdateInput) => Promise<void>;
+}
 type Mode = 'login' | 'register';
 type IdStatus = 'idle' | 'checking' | 'available' | 'taken' | 'invalid' | 'error';
 const languageStorageKey = 'whitemood-auth-language-v1';
@@ -104,7 +111,7 @@ function errorMessage(code: string, language: Language): string {
   return t.unavailable;
 }
 
-export default function AuthGate({ children }: { children: (user: AccountUser) => ReactNode }) {
+export default function AuthGate({ children }: { children: (user: AccountUser, account: AccountControls) => ReactNode }) {
   const preferredLanguage = useSyncExternalStore(subscribeLanguageChange, initialLanguage, serverLanguage);
   const [languageChoice, setLanguage] = useState<Language | null>(null);
   const language = languageChoice ?? preferredLanguage;
@@ -228,10 +235,27 @@ export default function AuthGate({ children }: { children: (user: AccountUser) =
     } finally { if (!request.signal.aborted && alive.current) { setPending(false); setLeaving(false); } }
   }
 
-  if (boot === 'ready' && user) return <>
-    <div className="account-strip" aria-label={t.account}><span className="account-name">{user.id}</span><button type="button" disabled={pending} onClick={() => void logout()}>{pending ? t.loggingOut : t.logout}</button>{error && <span role="alert">{errorMessage(error, language)}</span>}</div>
-    {leaving ? <div className="auth-logout-wait" role="status">{t.loggingOut}</div> : children(user)}
-  </>;
+  async function updateAccount(input: AccountUpdateInput): Promise<void> {
+    if (pending || !user) throw new AuthError('AUTH_REQUIRED');
+    const request = new AbortController(); actionRequest.current = request;
+    setPending(true); setError('');
+    try {
+      const next = readUser(await authRequest('/api/auth/update-account', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input), signal: request.signal,
+      }));
+      if (!next || next.userId !== user.userId) throw new AuthError('UNAVAILABLE');
+      if (!request.signal.aborted && alive.current) setUser(next);
+    } catch (failure) {
+      if (failure instanceof AuthError && ['AUTH_REQUIRED', 'ACCOUNT_CHANGED'].includes(failure.code)) {
+        window.dispatchEvent(new Event('whitemood:auth-required'));
+      }
+      throw failure;
+    } finally { if (!request.signal.aborted && alive.current) setPending(false); }
+  }
+
+  if (boot === 'ready' && user) return leaving
+    ? <div className="auth-logout-wait" role="status">{t.loggingOut}</div>
+    : children(user, { busy: pending, error: error ? errorMessage(error, language) : '', logout, update: updateAccount });
 
   const idNote = idStatus === 'checking' ? t.checkingId : idStatus === 'available' ? t.available : idStatus === 'taken' ? t.taken : idStatus === 'invalid' ? t.invalidId : idStatus === 'error' ? t.checkFailed : t.idRule;
   return <div className="auth-shell">

@@ -10,7 +10,7 @@ import { buildConsolidationBatch } from './memoryBudget';
 import type { AppModel } from './model';
 
 export const DEFAULT_SETTINGS: UserSettings = { language: 'zh', rate: 1, silenceMs: 1400, memoryEnabled: false, voiceURI: '', captions: false };
-export type ControllerState = Pick<AppModel, 'settings' | 'status' | 'level' | 'elapsedSeconds' | 'messages' | 'error' | 'service' | 'sessions' | 'memories' | 'memoryBusy' | 'muted' | 'availableVoices' | 'cvAvailable' | 'cvEnabled'>;
+export type ControllerState = Pick<AppModel, 'settings' | 'status' | 'level' | 'microphone' | 'elapsedSeconds' | 'messages' | 'error' | 'service' | 'sessions' | 'memories' | 'memoryBusy' | 'muted' | 'availableVoices' | 'cvAvailable' | 'cvEnabled'>;
 
 type CapturePort = Pick<VoiceCapture, 'start' | 'stop' | 'setSilenceMs' | 'setMuted' | 'setSpeaking'>;
 type SpeechPort = Pick<SpeechOutput, 'speak' | 'cancel'>;
@@ -30,7 +30,7 @@ const summarySignature = (record: SessionRecord) => JSON.stringify([record.langu
 
 export class WhiteMoodController {
   private state: ControllerState = {
-    settings: { ...DEFAULT_SETTINGS }, status: 'idle', level: 0, elapsedSeconds: 0, messages: [], error: null,
+    settings: { ...DEFAULT_SETTINGS }, status: 'idle', level: 0, microphone: { status: 'idle' }, elapsedSeconds: 0, messages: [], error: null,
     service: null, sessions: [], memories: [], memoryBusy: false, muted: false, availableVoices: [], cvAvailable: false, cvEnabled: false,
   };
   private listeners = new Set<() => void>();
@@ -51,6 +51,7 @@ export class WhiteMoodController {
   private attached = false;
   private lifecycle = 0;
   private memoryGeneration = 0;
+  private memoryRequest: AbortController | null = null;
   /** Successful blocks survive a transient quota failure only for this controller lifetime. */
   private summaryCheckpoints = new Map<string, SummaryCheckpoint>();
   private readonly deps: ControllerDependencies;
@@ -104,7 +105,7 @@ export class WhiteMoodController {
     this.invalidateMemoryWork();
   }
 
-  private invalidateMemoryWork() { this.memoryGeneration++; this.summaryCheckpoints.clear(); }
+  private invalidateMemoryWork() { this.memoryGeneration++; this.memoryRequest?.abort(); this.summaryCheckpoints.clear(); }
 
   private validSettings(input: Partial<UserSettings>): UserSettings {
     return {
@@ -151,18 +152,35 @@ export class WhiteMoodController {
   }
 
   startCall = async (): Promise<void> => {
-    if (this.active || this.ending || this.state.status === 'connecting') return;
+    if (this.ending || this.state.status === 'connecting' || (this.active && this.capture)) return;
     if (!this.state.service?.configured) { this.patch({ error: 'service_unavailable' }); return; }
-    this.beginSession(); this.status('connecting'); this.patch({ muted: false });
+    if (!this.active) this.beginSession();
+    await this.connectMicrophone();
+  };
+
+  restartMicrophone = async (): Promise<void> => {
+    if (this.ending || this.state.microphone.status === 'starting') return;
+    if (!this.active) { await this.startCall(); return; }
+    const previous = this.capture; this.capture = null;
+    this.interrupt();
+    // Stop disconnects tracks synchronously before awaiting context.close(). Start the replacement
+    // in this same click stack so browser audio activation is preserved on a retry.
+    const stopping = previous?.stop();
+    await Promise.all([stopping, this.connectMicrophone()]);
+  };
+
+  private async connectMicrophone(): Promise<void> {
+    this.status('connecting'); this.patch({ muted: false, error: null, microphone: { status: 'starting' } });
     const sessionId = this.current!.id;
     const valid = () => this.active && this.capture === capture && this.current?.id === sessionId;
     const capture = this.deps.capture({
       onSpeechStart: () => { if (valid()) this.interrupt(); },
       onUtterance: (blob, signals) => { if (valid()) void this.processAudio(blob, signals); },
       onLevel: level => { if (valid()) this.patch({ level }); },
+      onState: microphone => { if (valid()) this.patch({ microphone }); },
       onError: error => {
         if (!valid()) return;
-        this.interrupt(); this.patch({ error: errorKey(error), muted: true });
+        this.interrupt(); this.patch({ error: errorKey(error), muted: true, microphone: { status: 'error' } });
         this.capture = null; if (this.active) this.status('listening');
       },
     }, this.state.settings);
@@ -173,11 +191,11 @@ export class WhiteMoodController {
       if (this.getSnapshot().status === 'connecting') this.status('listening');
     } catch (error) {
       if (!valid()) return;
-      this.capture = null; this.patch({ error: errorKey(error), muted: true });
+      this.capture = null; this.patch({ error: errorKey(error), muted: true, microphone: { status: 'error' } });
       // Keep the real text fallback available without pretending microphone access succeeded.
       this.status('listening');
     }
-  };
+  }
 
   private interrupt() {
     this.generation++; this.request?.abort(); this.request = null; this.deps.speech.cancel(); this.capture?.setSpeaking(false);
@@ -192,7 +210,7 @@ export class WhiteMoodController {
 
   toggleMute = (): void => {
     if (!this.active) return;
-    if (!this.capture) { this.patch({ error: 'microphone_missing', muted: true }); return; }
+    if (!this.capture) { void this.restartMicrophone(); return; }
     const muted = !this.state.muted; this.capture.setMuted(muted); this.patch({ muted, level: 0 });
   };
 
@@ -204,7 +222,7 @@ export class WhiteMoodController {
       const result = await this.deps.api.transcribe(audio, this.state.settings.language, request.signal);
       if (!this.active || generation !== this.generation) return;
       const text = result.text.trim();
-      if (!text) { this.status('listening'); return; }
+      if (!text) { this.patch({ microphone: { ...this.state.microphone, status: 'unclear' } }); this.status('listening'); return; }
       await this.respond(text, signals, generation, request);
     } catch (error) { this.handleTurnError(error, generation); }
   }
@@ -284,7 +302,7 @@ export class WhiteMoodController {
   endCall = async (): Promise<void> => {
     if (!this.active || this.ending) return;
     this.ending = true;
-    this.active = false; this.interrupt(); this.status('ended'); this.patch({ level: 0 });
+    this.active = false; this.interrupt(); this.status('ended'); this.patch({ level: 0, microphone: { status: 'idle' } });
     if (this.timer) clearInterval(this.timer); this.timer = null;
     const session = this.current;
     if (session) {
@@ -309,7 +327,8 @@ export class WhiteMoodController {
     if (!this.attached || this.state.memoryBusy || !this.state.settings.memoryEnabled || !this.state.service?.configured) return;
     const record = this.state.sessions.find(s => s.id === id);
     if (!record || !record.endedAt || !record.messages.some(m => m.role === 'user')) return;
-    const generation = this.memoryGeneration; this.patch({ memoryBusy: true });
+    const generation = this.memoryGeneration; const request = new AbortController(); this.memoryRequest = request;
+    this.patch({ memoryBusy: true });
     let checkpoint: SummaryCheckpoint | undefined;
     try {
       const chunks = summaryChunks(record.messages);
@@ -320,13 +339,13 @@ export class WhiteMoodController {
       }
       const valid = () => {
         const currentRecord = this.state.sessions.find(session => session.id === id);
-        return this.attached && generation === this.memoryGeneration && this.state.settings.memoryEnabled
+        return !request.signal.aborted && this.attached && generation === this.memoryGeneration && this.state.settings.memoryEnabled
           && this.summaryCheckpoints.get(id) === checkpoint && !!currentRecord && summarySignature(currentRecord) === signature;
       };
       await this.deps.store.setSummaryStatus(id, 'pending');
       for (let index = checkpoint.parts.length; index < chunks.length; index++) {
         if (!valid()) { this.summaryCheckpoints.delete(id); return; }
-        const result = await this.deps.api.summarize({ language: record.language, sessionId: id, messages: chunks[index] });
+        const result = await this.deps.api.summarize({ language: record.language, sessionId: id, messages: chunks[index] }, request.signal);
         if (!valid()) { this.summaryCheckpoints.delete(id); return; }
         checkpoint.parts.push(result);
       }
@@ -341,10 +360,15 @@ export class WhiteMoodController {
       }, memories: parts.flatMap(part => part.memories) };
       await this.deps.store.commitSummary(id, result); this.summaryCheckpoints.delete(id);
     } catch {
-      if (!this.attached || generation !== this.memoryGeneration || !this.state.settings.memoryEnabled) { this.summaryCheckpoints.delete(id); return; }
+      if (request.signal.aborted || !this.attached || generation !== this.memoryGeneration || !this.state.settings.memoryEnabled) { this.summaryCheckpoints.delete(id); return; }
       await this.deps.store.setSummaryStatus(id, 'failed').catch(() => undefined); this.patch({ error: 'summary_failed' });
     }
-    finally { this.patch({ memoryBusy: false }); await this.reloadMemory(); }
+    finally {
+      if (this.memoryRequest === request) {
+        this.memoryRequest = null; this.patch({ memoryBusy: false });
+        if (this.attached) await this.reloadMemory();
+      }
+    }
   };
 
   private async runMaintenance() {
@@ -359,12 +383,18 @@ export class WhiteMoodController {
     if (!snapshot || Date.now() - snapshot.lastConsolidatedAt < 24 * 60 * 60 * 1000) return;
     const batch = buildConsolidationBatch(snapshot, this.state.settings.language);
     if (!batch) return;
+    const request = new AbortController(); this.memoryRequest = request;
     this.patch({ memoryBusy: true });
     try {
-      const result = await this.deps.api.consolidate(batch.request);
-      if (this.attached && generation === this.memoryGeneration && this.state.settings.memoryEnabled) await this.deps.store.applyConsolidation(snapshot.revision, result, batch.sourceIds, batch.includedMemoryIds);
+      const result = await this.deps.api.consolidate(batch.request, request.signal);
+      if (!request.signal.aborted && this.attached && generation === this.memoryGeneration && this.state.settings.memoryEnabled) await this.deps.store.applyConsolidation(snapshot.revision, result, batch.sourceIds, batch.includedMemoryIds);
     } catch { /* Leave the timestamp unchanged so a later real opportunity can retry. */ }
-    finally { this.patch({ memoryBusy: false }); await this.reloadMemory(); }
+    finally {
+      if (this.memoryRequest === request) {
+        this.memoryRequest = null; this.patch({ memoryBusy: false });
+        if (this.attached) await this.reloadMemory();
+      }
+    }
   }
 
   deleteSession = async (id: string) => {

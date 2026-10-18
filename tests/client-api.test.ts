@@ -73,6 +73,32 @@ describe('anonymous client session recovery', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('ignores a late AUTH_REQUIRED response after cancellation even when fetch ignores the signal', async () => {
+    const controller = new AbortController();
+    const dispatchEvent = vi.fn(); vi.stubGlobal('window', { dispatchEvent });
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementationOnce(async () => {
+      controller.abort();
+      return Response.json({ error: { code: 'AUTH_REQUIRED' } }, { status: 401 });
+    }));
+
+    await expect(api.respond(input, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  it('rechecks cancellation after reading a delayed error body before expiring an account session', async () => {
+    const controller = new AbortController();
+    const dispatchEvent = vi.fn(); vi.stubGlobal('window', { dispatchEvent });
+    const response = Response.json({ error: { code: 'AUTH_REQUIRED' } }, { status: 401 });
+    vi.spyOn(response, 'json').mockImplementationOnce(async () => {
+      controller.abort();
+      return { error: { code: 'AUTH_REQUIRED' } };
+    });
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValueOnce(response));
+
+    await expect(api.respond(input, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(dispatchEvent).not.toHaveBeenCalled();
+  });
+
   it('does not replay the POST if cancellation occurs while refreshing the cookie', async () => {
     const controller = new AbortController();
     const fetchMock = vi.fn<typeof fetch>()

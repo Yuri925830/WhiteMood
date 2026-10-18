@@ -211,4 +211,222 @@ describe('WhiteMood ID and password accounts', () => {
     expect(session?.status).toBe(503);
     await expect(auth.authenticate(request('session', undefined, `wm_account_session=${'A'.repeat(43)}`), env)).rejects.toThrow('Account access is temporarily unavailable.');
   });
+
+  it('updates the ID and password together, keeps the stable user ID, and revokes every prior session', async () => {
+    const { db, env, auth } = fixture();
+    const created = await register(auth, env);
+    const originalUser = (await userBody(created)).user!;
+    const firstCookie = sessionCookie(created);
+    const otherLogin = await auth.handle(request('login', { id: 'test_user', password }), env);
+    const secondCookie = sessionCookie(otherLogin!);
+    const changedPassword = '  새로운 비밀번호🙂 123  ';
+    const changed = await auth.handle(request('update-account', { currentPassword: password, id: ' ＣＬＯＵＤ_２ ', newPassword: changedPassword }, firstCookie), env);
+    expect(changed?.status).toBe(200);
+    const updatedUser = { userId: originalUser.userId, id: 'cloud_2' };
+    expect(await userBody(changed!)).toEqual({ user: updatedUser });
+    const updatedCookie = sessionCookie(changed!);
+    expect(updatedCookie).not.toBe(firstCookie);
+    expect(changed?.headers.get('set-cookie')).toContain('HttpOnly; Secure; SameSite=Strict');
+    expect(await auth.authenticate(request('session', undefined, firstCookie), env)).toBeNull();
+    expect(await auth.authenticate(request('session', undefined, secondCookie), env)).toBeNull();
+    expect(await auth.authenticate(request('session', undefined, updatedCookie), env)).toEqual(updatedUser);
+    expect(db.sqlite.prepare('SELECT * FROM wm_accounts').all()).toHaveLength(1);
+    expect(db.sqlite.prepare('SELECT * FROM wm_account_sessions').all()).toHaveLength(1);
+    expect((await auth.handle(request('login', { id: 'test_user', password }), env))?.status).toBe(401);
+    expect((await auth.handle(request('login', { id: 'cloud_2', password }), env))?.status).toBe(401);
+    const newLogin = await auth.handle(request('login', { id: 'cloud_2', password: changedPassword }), env);
+    expect(newLogin?.status).toBe(200);
+    expect(await userBody(newLogin!)).toEqual({ user: updatedUser });
+  });
+
+  it('supports an ID-only change and a password-only change without losing the account', async () => {
+    const { env, auth } = fixture();
+    const created = await register(auth, env);
+    const userId = (await userBody(created)).user!.userId;
+    const changedId = await auth.handle(request('update-account', { currentPassword: password, id: 'renamed_user' }, sessionCookie(created)), env);
+    expect(changedId?.status).toBe(200);
+    expect(await userBody(changedId!)).toEqual({ user: { userId, id: 'renamed_user' } });
+    const changedPassword = await auth.handle(request('update-account', { currentPassword: password, newPassword: 'New correct password 456' }, sessionCookie(changedId!)), env);
+    expect(changedPassword?.status).toBe(200);
+    expect(await userBody(changedPassword!)).toEqual({ user: { userId, id: 'renamed_user' } });
+    expect((await auth.handle(request('login', { id: 'renamed_user', password: 'New correct password 456' }), env))?.status).toBe(200);
+  });
+
+  it('requires an existing session and the current password before changing account data', async () => {
+    const { db, env, auth } = fixture();
+    const created = await register(auth, env);
+    const before = db.sqlite.prepare('SELECT * FROM wm_accounts').get();
+    const signedOut = await auth.handle(request('update-account', { currentPassword: password, id: 'renamed_user' }), env);
+    expect(signedOut?.status).toBe(401);
+    expect((await errorBody(signedOut!)).error.code).toBe('AUTH_REQUIRED');
+    const wrongPassword = await auth.handle(request('update-account', { currentPassword: 'Wrong password 123', id: 'renamed_user' }, sessionCookie(created)), env);
+    expect(wrongPassword?.status).toBe(401);
+    expect((await errorBody(wrongPassword!)).error.code).toBe('INVALID_CREDENTIALS');
+    expect(db.sqlite.prepare('SELECT * FROM wm_accounts').get()).toEqual(before);
+    expect(await auth.authenticate(request('session', undefined, sessionCookie(created)), env)).not.toBeNull();
+  });
+
+  it('rejects an occupied ID without altering either account or revoking existing sessions', async () => {
+    const { db, env, auth } = fixture();
+    const first = await register(auth, env);
+    const second = await register(auth, env, 'occupied_id');
+    const before = db.sqlite.prepare('SELECT * FROM wm_accounts ORDER BY login_id').all();
+    const response = await auth.handle(request('update-account', { currentPassword: password, id: ' ＯＣＣＵＰＩＥＤ_ＩＤ ', newPassword: 'Changed password 123' }, sessionCookie(first)), env);
+    expect(response?.status).toBe(409);
+    expect((await errorBody(response!)).error.code).toBe('ID_TAKEN');
+    expect(response?.headers.get('set-cookie')).toBeNull();
+    expect(db.sqlite.prepare('SELECT * FROM wm_accounts ORDER BY login_id').all()).toEqual(before);
+    expect(await auth.authenticate(request('session', undefined, sessionCookie(first)), env)).not.toBeNull();
+    expect(await auth.authenticate(request('session', undefined, sessionCookie(second)), env)).not.toBeNull();
+    expect(db.sqlite.prepare('SELECT * FROM wm_account_sessions').all()).toHaveLength(2);
+  });
+
+  it('validates change fields and refuses effective no-ops', async () => {
+    const { env, auth } = fixture();
+    const created = await register(auth, env);
+    const current = sessionCookie(created);
+    for (const body of [
+      { currentPassword: password },
+      { currentPassword: password, id: ' ＴＥＳＴ_ＵＳＥＲ ' },
+      { currentPassword: password, newPassword: password },
+    ]) {
+      const response = await auth.handle(request('update-account', body, current), env);
+      expect(response?.status).toBe(400);
+      expect((await errorBody(response!)).error.code).toBe('NO_CHANGES');
+    }
+    for (const body of [
+      { currentPassword: password, id: null },
+      { currentPassword: password, newPassword: 123 },
+      { currentPassword: password, id: 'new_id', email: 'unrequested@example.com' },
+      { id: 'new_id' },
+    ]) {
+      const response = await auth.handle(request('update-account', body, current), env);
+      expect(response?.status).toBe(400);
+      expect((await errorBody(response!)).error.code).toBe('INVALID_REQUEST');
+    }
+    const invalidId = await auth.handle(request('update-account', { currentPassword: password, id: 'bad-id' }, current), env);
+    expect((await errorBody(invalidId!)).error.code).toBe('INVALID_ID');
+    const invalidPassword = await auth.handle(request('update-account', { currentPassword: password, newPassword: 'short' }, current), env);
+    expect((await errorBody(invalidPassword!)).error.code).toBe('INVALID_PASSWORD');
+  });
+
+  it('shares current-account login quotas with reauthentication and rejects cross-origin changes', async () => {
+    const { db, env, auth, hashPassword } = fixture();
+    const created = await register(auth, env);
+    const current = sessionCookie(created);
+    const calls = hashPassword.mock.calls.length;
+    const batches = db.batch.mock.calls.length;
+    const crossOrigin = await auth.handle(request('update-account', { currentPassword: password, id: 'renamed_user' }, current, { origin: 'https://evil.example' }), env);
+    expect(crossOrigin?.status).toBe(403);
+    expect(hashPassword.mock.calls).toHaveLength(calls);
+    expect(db.batch.mock.calls).toHaveLength(batches);
+    for (let i = 0; i < 9; i++) expect((await auth.handle(request('login', { id: 'test_user', password: 'Wrong password 123' }), env))?.status).toBe(401);
+    const limited = await auth.handle(request('update-account', { currentPassword: password, id: 'renamed_user' }, current), env);
+    expect(limited?.status).toBe(429);
+    expect((await errorBody(limited!)).error.code).toBe('AUTH_RATE_LIMITED');
+    expect(hashPassword).toHaveBeenCalledTimes(10);
+  });
+
+  it('allows only one simultaneous update to succeed and never revokes its replacement session from a stale update', async () => {
+    const { db, env, auth } = fixture();
+    const created = await register(auth, env);
+    const current = sessionCookie(created);
+    const results = await Promise.all([
+      auth.handle(request('update-account', { currentPassword: password, id: 'first_rename' }, current), env),
+      auth.handle(request('update-account', { currentPassword: password, id: 'second_rename' }, current), env),
+    ]);
+    expect(results.map(response => response!.status).sort()).toEqual([200, 409]);
+    const loser = results.find(response => response!.status === 409)!;
+    expect((await errorBody(loser)).error.code).toBe('ACCOUNT_CHANGED');
+    expect(loser.headers.get('set-cookie')).toBeNull();
+    const winner = results.find(response => response!.status === 200)!;
+    const winnerUser = (await userBody(winner)).user;
+    expect(await auth.authenticate(request('session', undefined, sessionCookie(winner)), env)).toEqual(winnerUser);
+    expect(db.sqlite.prepare('SELECT * FROM wm_account_sessions').all()).toHaveLength(1);
+    expect(await auth.authenticate(request('session', undefined, current), env)).toBeNull();
+  });
+
+  it('does not change credentials or issue a replacement when the active session was revoked during reauthentication', async () => {
+    const { db, env, auth, hashPassword } = fixture();
+    const created = await register(auth, env);
+    const before = db.sqlite.prepare('SELECT * FROM wm_accounts').get();
+    hashPassword.mockImplementationOnce(async (value, salt) => {
+      db.sqlite.exec('DELETE FROM wm_account_sessions');
+      return fastHash(value, salt);
+    });
+    const response = await auth.handle(request('update-account', { currentPassword: password, newPassword: 'Changed password 123' }, sessionCookie(created)), env);
+    expect(response?.status).toBe(409);
+    expect((await errorBody(response!)).error.code).toBe('ACCOUNT_CHANGED');
+    expect(db.sqlite.prepare('SELECT * FROM wm_accounts').get()).toEqual(before);
+    expect(db.sqlite.prepare('SELECT * FROM wm_account_sessions').all()).toHaveLength(0);
+  });
+
+  it('does not issue an old-password login session when credentials change during password verification', async () => {
+    const { db, env, auth, hashPassword } = fixture();
+    await register(auth, env);
+    hashPassword.mockImplementationOnce(async (value, salt) => {
+      db.sqlite.prepare('UPDATE wm_accounts SET password_hash = ?, salt = ?').run('a'.repeat(128), 'b'.repeat(32));
+      db.sqlite.exec('DELETE FROM wm_account_sessions');
+      return fastHash(value, salt);
+    });
+    const response = await auth.handle(request('login', { id: 'test_user', password }), env);
+    expect(response?.status).toBe(401);
+    expect((await errorBody(response!)).error.code).toBe('INVALID_CREDENTIALS');
+    expect(response?.headers.get('set-cookie')).toBeNull();
+    expect(db.sqlite.prepare('SELECT * FROM wm_account_sessions').all()).toHaveLength(0);
+  });
+
+  it('uses the private hasher binding for registration, login, and both password-change hashes', async () => {
+    const db = database();
+    const hashPassword = vi.fn(fastHash);
+    const getByName = vi.fn(() => ({ hashPassword }));
+    const env: AccountAuthEnv = { DB: db.binding, REQUIRE_PASSWORD_HASHER: 'true', PASSWORD_HASHER: { getByName } };
+    const auth = createAccountAuth({ now: () => start });
+    const created = await register(auth, env, 'rpc_account');
+    const loggedIn = await auth.handle(request('login', { id: 'rpc_account', password }), env);
+    expect(loggedIn?.status).toBe(200);
+    const changed = await auth.handle(request('update-account', { currentPassword: password, newPassword: 'Changed RPC password 456' }, sessionCookie(created)), env);
+    expect(changed?.status).toBe(200);
+    expect(hashPassword).toHaveBeenCalledTimes(4);
+    expect(hashPassword.mock.calls.map(([value]) => value)).toEqual([password, password, password, 'Changed RPC password 456']);
+    for (let index = 0; index < getByName.mock.calls.length; index++) {
+      const salt = hashPassword.mock.calls[index][1];
+      expect(getByName.mock.calls[index]).toEqual([`whitemood-password-v1-${Number.parseInt(salt.slice(0, 2), 16) % 4}`]);
+    }
+    expect(await auth.authenticate(request('session', undefined, sessionCookie(created)), env)).toBeNull();
+    expect(await auth.authenticate(request('session', undefined, sessionCookie(changed!)), env)).not.toBeNull();
+  });
+
+  it.each([true, 'true'])('fails closed without a private binding when standalone hashing is required=%s', async required => {
+    const db = database();
+    const auth = createAccountAuth({ now: () => start });
+    const response = await auth.handle(request('register', { id: 'missing_rpc', password }), { DB: db.binding, REQUIRE_PASSWORD_HASHER: required });
+    expect(response?.status).toBe(503);
+    expect((await errorBody(response!)).error.code).toBe('AUTH_UNAVAILABLE');
+    expect(db.sqlite.prepare('SELECT * FROM wm_accounts').all()).toHaveLength(0);
+  });
+
+  it.each(['not-a-hash', null, ['a'.repeat(128)]])('rejects malformed private hasher output without a native fallback (%s)', async result => {
+    const db = database();
+    const hashPassword = vi.fn(async () => result as string);
+    const env: AccountAuthEnv = { DB: db.binding, PASSWORD_HASHER: { getByName: () => ({ hashPassword }) } };
+    const auth = createAccountAuth({ now: () => start });
+    const response = await auth.handle(request('register', { id: 'bad_rpc', password }), env);
+    expect(response?.status).toBe(503);
+    expect((await errorBody(response!)).error.code).toBe('AUTH_UNAVAILABLE');
+    expect(hashPassword).toHaveBeenCalledOnce();
+    expect(db.sqlite.prepare('SELECT * FROM wm_accounts').all()).toHaveLength(0);
+  });
+
+  it('fails closed on a private hasher RPC error without leaking its message or falling back to native work', async () => {
+    const db = database();
+    const hashPassword = vi.fn(async () => { throw new Error(`Private RPC error with ${password}`); });
+    const env: AccountAuthEnv = { DB: db.binding, PASSWORD_HASHER: { getByName: () => ({ hashPassword }) } };
+    const auth = createAccountAuth({ now: () => start });
+    const response = await auth.handle(request('register', { id: 'failed_rpc', password }), env);
+    expect(response?.status).toBe(503);
+    expect(await response!.text()).not.toContain(password);
+    expect(hashPassword).toHaveBeenCalledOnce();
+    expect(db.sqlite.prepare('SELECT * FROM wm_accounts').all()).toHaveLength(0);
+  });
 });

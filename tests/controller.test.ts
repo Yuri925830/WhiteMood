@@ -31,7 +31,7 @@ async function setup(options: { captureStart?: Promise<void>; captureStop?: Prom
   type CaptureCallbacks = Parameters<ControllerDependencies['capture']>[0];
   const captures: Array<{ callbacks: CaptureCallbacks; start: ReturnType<typeof vi.fn<() => Promise<void>>>; stop: ReturnType<typeof vi.fn<() => Promise<void>>>; setSpeaking: ReturnType<typeof vi.fn> }> = [];
   const capture = vi.fn((callbacks: CaptureCallbacks) => {
-    const value = { callbacks, start: vi.fn(() => options.captureStart ?? Promise.resolve()), stop: vi.fn(() => options.captureStop ?? Promise.resolve()), setSilenceMs: vi.fn(), setMuted: vi.fn(), setSpeaking: vi.fn() };
+    const value = { callbacks, start: vi.fn(async () => { await (options.captureStart ?? Promise.resolve()); callbacks.onState?.({ status: 'ready' }); }), stop: vi.fn(() => options.captureStop ?? Promise.resolve()), setSilenceMs: vi.fn(), setMuted: vi.fn(), setSpeaking: vi.fn() };
     captures.push(value); return value;
   });
   const playback: Array<ReturnType<typeof deferred<void>> & { callbacks: { onSentence: (text: string) => void }; canceled: boolean }> = [];
@@ -49,6 +49,45 @@ async function setup(options: { captureStart?: Promise<void>; captureStop?: Prom
 afterEach(() => { controllers.splice(0).forEach(controller => controller.dispose()); vi.unstubAllGlobals(); });
 
 describe('call orchestration uses real lifecycle boundaries', () => {
+  it('connects the microphone after a text-first conversation without discarding its messages', async () => {
+    const test = await setup();
+    const turn = test.controller.sendText('Start with a written thought'); await flush();
+    test.playback[0].resolve(); await turn;
+    expect(test.captures).toHaveLength(0);
+    const messages = test.controller.getSnapshot().messages;
+    test.controller.toggleMute(); await flush();
+    expect(test.captures).toHaveLength(1);
+    expect(test.controller.getSnapshot().microphone.status).toBe('ready');
+    expect(test.controller.getSnapshot().messages).toEqual(messages);
+    expect(test.controller.getSnapshot().muted).toBe(false);
+    test.captures[0].callbacks.onUtterance(new Blob(['quiet PCM']), signals); await flush();
+    expect(test.api.transcribe).toHaveBeenCalledOnce();
+    test.playback[1].resolve(); await flush();
+  });
+
+  it('retries a failed microphone in the current call and ignores the discarded processor callbacks', async () => {
+    const test = await setup(); await test.controller.startCall();
+    const oldCapture = test.captures[0];
+    oldCapture.callbacks.onError(new Error('Microphone stopped'));
+    expect(test.controller.getSnapshot().microphone.status).toBe('error');
+    await test.controller.restartMicrophone();
+    expect(test.captures).toHaveLength(2);
+    oldCapture.callbacks.onState?.({ status: 'interrupted' });
+    oldCapture.callbacks.onUtterance(new Blob(['stale']), signals);
+    expect(test.controller.getSnapshot().microphone.status).toBe('ready');
+    expect(test.controller.getSnapshot().error).toBe(null);
+    expect(test.api.transcribe).not.toHaveBeenCalled();
+  });
+
+  it('explains an empty transcription while keeping capture available for another try', async () => {
+    const test = await setup(); await test.controller.startCall();
+    test.api.transcribe.mockResolvedValueOnce({ text: '' });
+    test.captures[0].callbacks.onUtterance(new Blob(['unclear PCM']), signals); await flush();
+    expect(test.controller.getSnapshot().microphone.status).toBe('unclear');
+    expect(test.controller.getSnapshot().status).toBe('listening');
+    expect(test.api.respond).not.toHaveBeenCalled();
+  });
+
   it.each([undefined, false, true])('restores only simple preferences and explicit captions=%s', async captions => {
     vi.stubGlobal('localStorage', { getItem: () => JSON.stringify({ language: 'ko', memoryEnabled: false, captions, voiceURI: 'obsolete-device-voice', rate: 1.25, silenceMs: 3000 }), setItem: vi.fn() });
     const test = await setup();

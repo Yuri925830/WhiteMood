@@ -1,0 +1,21 @@
+.account-settings { color: var(--ink); width: 100%; min-width: 0; }
+.account-settings-heading h2 { margin: 0; font-size: 21px; font-weight: 500; line-height: 1.5; }
+.account-settings-heading > p { color: var(--muted); margin: 7px 0 26px; font-size: 13px; }
+.account-settings fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.account-settings-field { display: grid; gap: 7px; margin: 0 0 22px; }
+.account-settings-field label { font-size: 13px; font-weight: 500; }
+.account-settings-field input { width: 100%; min-width: 0; min-height: 46px; border: 1px solid var(--line); border-radius: 11px; color: var(--ink); background: var(--surface); padding: 10px 13px; cursor: text; }
+.account-settings-field input:not(:disabled):hover { border-color: #aacbe2; }
+.account-settings-field input:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+.account-settings-field input[aria-invalid='true'] { border-color: var(--danger, #9a514d); }
+.account-settings-field input:disabled { background: var(--soft); color: var(--muted); cursor: not-allowed; opacity: 1; }
+.account-settings-field p { color: var(--muted); font-size: 11px; line-height: 1.7; margin: 0; }
+.account-settings-session-note { font-size: 12px; line-height: 1.8; margin: 0 0 20px; color: var(--muted); }
+.account-settings-call-notice { padding: 12px 14px; margin: 0 0 22px; border: 1px solid var(--line); border-radius: 11px; background: var(--soft); font-size: 12px; line-height: 1.8; }
+.account-settings-save { display: inline-flex; align-items: center; justify-content: center; border-radius: 30px; min-height: 44px; padding: 10px 24px; color: #fff; background: var(--blue); font-size: 13px; font-weight: 500; }
+.account-settings-save:not(:disabled):hover { background: var(--blue-hover, #255d87); }
+.account-settings fieldset:disabled .account-settings-save { opacity: .55; cursor: not-allowed; }
+.account-settings-error, .account-settings-success { font-size: 12px; line-height: 1.8; padding: 12px 14px; border-radius: 11px; margin: 18px 0 0; }
+.account-settings-error { color: var(--danger, #9a514d); background: var(--danger-soft, #fff2f0); border: 1px solid var(--danger-line, #ecd3cf); }
+.account-settings-success { color: var(--ink); background: var(--soft); border: 1px solid var(--line); }
+@media (max-width: 600px) { .account-settings-save { width: 100%; } }

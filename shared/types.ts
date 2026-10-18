@@ -2,6 +2,12 @@ export type Language = 'zh' | 'en' | 'ko';
 export type CallStatus = 'idle' | 'connecting' | 'listening' | 'transcribing' | 'thinking' | 'speaking' | 'ended' | 'error';
 export type SpeechStyle = 'warm' | 'steady' | 'clear';
 
+/** Local microphone health only; never sent to an AI provider or stored with memories. */
+export interface MicrophoneState {
+  status: 'idle' | 'starting' | 'ready' | 'hearing' | 'quiet' | 'interrupted' | 'error' | 'unclear';
+  deviceLabel?: string;
+}
+
 export interface UserSettings {
   language: Language;
   rate: number;

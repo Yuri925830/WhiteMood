@@ -13,7 +13,7 @@ export function useWhiteMood(userId: string): AppModel {
   }, [controller]);
   return {
     ...state, updateSettings: controller.updateSettings, setLanguage: controller.setLanguage,
-    startCall: controller.startCall, endCall: controller.endCall, toggleMute: controller.toggleMute,
+    startCall: controller.startCall, restartMicrophone: controller.restartMicrophone, endCall: controller.endCall, toggleMute: controller.toggleMute,
     stopSpeaking: controller.stopSpeaking, sendText: controller.sendText, deleteSession: controller.deleteSession,
     deleteMemory: controller.deleteMemory, editMemory: controller.editMemory, clearAllMemory: controller.clearAllMemory,
     retrySummary: controller.retrySummary, setCvEnabled: controller.setCvEnabled, refreshService: controller.refreshService, clearError: controller.clearError,

@@ -8,9 +8,13 @@ async function request<T>(path: string, init: RequestInit = {}, sessionRefreshed
   init.signal?.throwIfAborted();
   let response: Response;
   try { response = await fetch(path, { ...init, credentials: 'same-origin' }); }
-  catch (error) { if ((error as Error).name === 'AbortError') throw error; throw new ApiError('network'); }
+  catch (error) { init.signal?.throwIfAborted(); if ((error as Error).name === 'AbortError') throw error; throw new ApiError('network'); }
+  // Some transports can settle after cancellation. A disposed account's late
+  // response must never expire the currently signed-in account's UI session.
+  init.signal?.throwIfAborted();
   if (!response.ok) {
     const body = await response.json().catch(() => null) as ApiErrorBody | null;
+    init.signal?.throwIfAborted();
     const code = body?.error?.code?.toLowerCase() ?? (response.status === 429 ? 'rate_limited' : 'provider_error');
     if (response.status === 401 && code === 'auth_required' && typeof window !== 'undefined') {
       window.dispatchEvent(new Event('whitemood:auth-required'));
@@ -22,7 +26,9 @@ async function request<T>(path: string, init: RequestInit = {}, sessionRefreshed
     }
     throw new ApiError(code, body?.error?.retryAfter ?? Number(response.headers.get('retry-after') || 0));
   }
-  return await response.json() as T;
+  const body = await response.json() as T;
+  init.signal?.throwIfAborted();
+  return body;
 }
 
 function json<T>(path: string, body: unknown, signal?: AbortSignal) {
@@ -48,6 +54,7 @@ export function errorKey(error: unknown): string {
     return 'provider_error';
   }
   if (error instanceof Error) {
+    if (error.name === 'MicrophoneError' && /microphone_(interrupted|stalled)/.test(error.message)) return error.message;
     if (error.name === 'NotAllowedError' || error.name === 'SecurityError') return 'microphone_denied';
     if (error.name === 'NotFoundError' || error.name === 'NotReadableError') return 'microphone_missing';
     if (/voice|locale|language/i.test(error.message)) return 'voice_unavailable';
