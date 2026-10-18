@@ -1,4 +1,4 @@
-import type { CallStatus, ChatMessage, Language, ServiceHealth, SessionRecord, UserSettings, VoiceSignals } from '../../shared/types';
+import type { CallStatus, ChatMessage, Language, ServiceHealth, SessionRecord, SummarizeResult, UserSettings, VoiceSignals } from '../../shared/types';
 import { VoiceCapture } from '../audio/capture';
 import { getAvailableVoices, SpeechOutput } from '../audio/speech';
 import { getCvAdapter, recentCvObservation, subscribeCvAdapter } from '../integrations/cv';
@@ -6,6 +6,7 @@ import type { CvObservation } from '../../shared/types';
 import { MemoryStore, selectMemories } from '../memory/store';
 import { aborted, api, ApiError, errorKey } from './api';
 import { forgetCurrentCall, heardHistory, summaryChunks } from './history';
+import { buildConsolidationBatch } from './memoryBudget';
 import type { AppModel } from './model';
 
 export const DEFAULT_SETTINGS: UserSettings = { language: 'zh', rate: 1, silenceMs: 1400, memoryEnabled: false, voiceURI: '', captions: false };
@@ -22,6 +23,9 @@ export interface ControllerDependencies {
   capture: (callbacks: CaptureCallbacks, settings: UserSettings) => CapturePort;
   voices: typeof getAvailableVoices;
 }
+
+interface SummaryCheckpoint { generation: number; signature: string; parts: SummarizeResult[] }
+const summarySignature = (record: SessionRecord) => JSON.stringify([record.language, record.endedAt, record.messages]);
 
 export class WhiteMoodController {
   private state: ControllerState = {
@@ -46,6 +50,8 @@ export class WhiteMoodController {
   private attached = false;
   private lifecycle = 0;
   private memoryGeneration = 0;
+  /** Successful blocks survive a transient quota failure only for this controller lifetime. */
+  private summaryCheckpoints = new Map<string, SummaryCheckpoint>();
   private readonly deps: ControllerDependencies;
 
   constructor(dependencies: Partial<ControllerDependencies> = {}) {
@@ -94,7 +100,10 @@ export class WhiteMoodController {
     this.cvCleanup?.(); this.cvCleanup = null;
     if (this.timer) clearInterval(this.timer); if (this.maintenance) clearInterval(this.maintenance);
     this.timer = null; this.maintenance = null;
+    this.invalidateMemoryWork();
   }
+
+  private invalidateMemoryWork() { this.memoryGeneration++; this.summaryCheckpoints.clear(); }
 
   private validSettings(input: Partial<UserSettings>): UserSettings {
     return {
@@ -115,7 +124,7 @@ export class WhiteMoodController {
     }
     const settings = this.validSettings({ ...this.state.settings, ...next });
     if (settings.memoryEnabled !== this.state.settings.memoryEnabled) {
-      this.memoryGeneration++;
+      this.invalidateMemoryWork();
       if (!settings.memoryEnabled) this.retainCall = false;
     }
     this.patch({ settings }); this.capture?.setSilenceMs(settings.silenceMs); this.refreshVoices();
@@ -216,7 +225,7 @@ export class WhiteMoodController {
     const history = heardHistory(this.current.messages);
     this.addMessage({ id: crypto.randomUUID(), role: 'user', text, timestamp: Date.now() });
     if (forgetCurrentCall(text)) {
-      this.retainCall = false; this.memoryGeneration++;
+      this.retainCall = false; this.invalidateMemoryWork();
       await this.persistQueue;
       await this.deps.store.deleteSession(sessionId);
       await this.reloadMemory();
@@ -224,7 +233,8 @@ export class WhiteMoodController {
     }
     this.status('thinking'); this.patch({ error: null });
     const result = await this.deps.api.respond({ language: this.current.language, text, history,
-      memories: this.retainCall && this.state.settings.memoryEnabled ? selectMemories(this.state.memories, text) : [],
+      memories: this.retainCall && this.state.settings.memoryEnabled
+        ? selectMemories(this.state.memories, text).map(memory => ({ ...memory, sourceSessionIds: memory.sourceSessionIds.slice(-32) })) : [],
       voice, cv: this.state.cvEnabled ? recentCvObservation(this.cvObservation) : undefined,
     }, request.signal);
     if (!this.active || generation !== this.generation || request.signal.aborted) return;
@@ -295,17 +305,32 @@ export class WhiteMoodController {
   }
 
   retrySummary = async (id: string): Promise<void> => {
-    if (this.state.memoryBusy || !this.state.settings.memoryEnabled || !this.state.service?.configured) return;
+    if (!this.attached || this.state.memoryBusy || !this.state.settings.memoryEnabled || !this.state.service?.configured) return;
     const record = this.state.sessions.find(s => s.id === id);
     if (!record || !record.endedAt || !record.messages.some(m => m.role === 'user')) return;
     const generation = this.memoryGeneration; this.patch({ memoryBusy: true });
+    let checkpoint: SummaryCheckpoint | undefined;
     try {
-      await this.deps.store.setSummaryStatus(id, 'pending');
-      const parts = [];
-      for (const messages of summaryChunks(record.messages)) {
-        if (generation !== this.memoryGeneration || !this.state.settings.memoryEnabled) return;
-        parts.push(await this.deps.api.summarize({ language: record.language, sessionId: id, messages }));
+      const chunks = summaryChunks(record.messages);
+      const signature = summarySignature(record);
+      checkpoint = this.summaryCheckpoints.get(id);
+      if (!checkpoint || checkpoint.generation !== generation || checkpoint.signature !== signature) {
+        checkpoint = { generation, signature, parts: [] }; this.summaryCheckpoints.set(id, checkpoint);
       }
+      const valid = () => {
+        const currentRecord = this.state.sessions.find(session => session.id === id);
+        return this.attached && generation === this.memoryGeneration && this.state.settings.memoryEnabled
+          && this.summaryCheckpoints.get(id) === checkpoint && !!currentRecord && summarySignature(currentRecord) === signature;
+      };
+      await this.deps.store.setSummaryStatus(id, 'pending');
+      for (let index = checkpoint.parts.length; index < chunks.length; index++) {
+        if (!valid()) { this.summaryCheckpoints.delete(id); return; }
+        const result = await this.deps.api.summarize({ language: record.language, sessionId: id, messages: chunks[index] });
+        if (!valid()) { this.summaryCheckpoints.delete(id); return; }
+        checkpoint.parts.push(result);
+      }
+      if (!valid()) { this.summaryCheckpoints.delete(id); return; }
+      const parts = checkpoint.parts;
       const unique = (items: string[]) => [...new Set(items)];
       const result = { summary: {
         text: parts.map(part => part.summary.text).join('\n'),
@@ -313,8 +338,11 @@ export class WhiteMoodController {
         preferences: unique(parts.flatMap(part => part.summary.preferences)),
         followUp: unique(parts.flatMap(part => part.summary.followUp)),
       }, memories: parts.flatMap(part => part.memories) };
-      if (generation === this.memoryGeneration && this.state.settings.memoryEnabled) await this.deps.store.commitSummary(id, result);
-    } catch { await this.deps.store.setSummaryStatus(id, 'failed').catch(() => undefined); this.patch({ error: 'summary_failed' }); }
+      await this.deps.store.commitSummary(id, result); this.summaryCheckpoints.delete(id);
+    } catch {
+      if (!this.attached || generation !== this.memoryGeneration || !this.state.settings.memoryEnabled) { this.summaryCheckpoints.delete(id); return; }
+      await this.deps.store.setSummaryStatus(id, 'failed').catch(() => undefined); this.patch({ error: 'summary_failed' });
+    }
     finally { this.patch({ memoryBusy: false }); await this.reloadMemory(); }
   };
 
@@ -328,16 +356,12 @@ export class WhiteMoodController {
     // Re-check before sending any saved content to the provider, not only before committing.
     if (!this.attached || this.active || this.state.memoryBusy || !this.state.settings.memoryEnabled || generation !== this.memoryGeneration) return;
     if (!snapshot || Date.now() - snapshot.lastConsolidatedAt < 24 * 60 * 60 * 1000) return;
-    const summaries = snapshot.sessions.filter(s => s.summary && s.endedAt && !snapshot.excludedSourceIds.includes(s.id)).sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0)).slice(0, 30)
-      .map(s => ({ id: s.id, endedAt: s.endedAt!, summary: {
-        text: s.summary!.text.slice(0, 4000), selfReported: s.summary!.selfReported.slice(0, 12),
-        preferences: s.summary!.preferences.slice(0, 12), followUp: s.summary!.followUp.slice(0, 12),
-      } }));
-    if (!summaries.length) return;
-    const validIds = new Set(summaries.map(s => s.id)); this.patch({ memoryBusy: true });
+    const batch = buildConsolidationBatch(snapshot, this.state.settings.language);
+    if (!batch) return;
+    this.patch({ memoryBusy: true });
     try {
-      const result = await this.deps.api.consolidate({ language: this.state.settings.language, summaries, existing: snapshot.memories.filter(m => m.sourceSessionIds.every(id => validIds.has(id))).slice(0, 80) });
-      if (generation === this.memoryGeneration && this.state.settings.memoryEnabled) await this.deps.store.applyConsolidation(snapshot.revision, result, summaries.map(s => s.id));
+      const result = await this.deps.api.consolidate(batch.request);
+      if (this.attached && generation === this.memoryGeneration && this.state.settings.memoryEnabled) await this.deps.store.applyConsolidation(snapshot.revision, result, batch.sourceIds, batch.includedMemoryIds);
     } catch { /* Leave the timestamp unchanged so a later real opportunity can retry. */ }
     finally { this.patch({ memoryBusy: false }); await this.reloadMemory(); }
   }
@@ -345,13 +369,13 @@ export class WhiteMoodController {
   deleteSession = async (id: string) => {
     try {
       if (this.current?.id === id) this.retainCall = false;
-      this.memoryGeneration++; await this.persistQueue; await this.deps.store.deleteSession(id); await this.reloadMemory();
+      this.invalidateMemoryWork(); await this.persistQueue; await this.deps.store.deleteSession(id); await this.reloadMemory();
     } catch { this.patch({ error: 'storage_error' }); }
   };
-  deleteMemory = async (id: string) => { try { this.memoryGeneration++; await this.deps.store.deleteMemory(id); await this.reloadMemory(); } catch { this.patch({ error: 'storage_error' }); } };
-  editMemory = async (id: string, text: string) => { try { this.memoryGeneration++; await this.deps.store.editMemory(id, text); await this.reloadMemory(); } catch { this.patch({ error: 'storage_error' }); } };
+  deleteMemory = async (id: string) => { try { this.invalidateMemoryWork(); await this.deps.store.deleteMemory(id); await this.reloadMemory(); } catch { this.patch({ error: 'storage_error' }); } };
+  editMemory = async (id: string, text: string) => { try { this.invalidateMemoryWork(); await this.deps.store.editMemory(id, text); await this.reloadMemory(); } catch { this.patch({ error: 'storage_error' }); } };
   clearAllMemory = async () => {
-    this.retainCall = false; this.memoryGeneration++;
+    this.retainCall = false; this.invalidateMemoryWork();
     try { await this.persistQueue; await this.deps.store.clear(); }
     catch { this.patch({ error: 'storage_error' }); return; }
     this.patch({ settings: { ...this.state.settings, memoryEnabled: false } });

@@ -96,12 +96,13 @@ export class MemoryStore {
     await this.mutate(state => { const item = state.sessions.find(s => s.id === id); if (item) item.summaryStatus = status; });
   }
 
-  async applyConsolidation(revision: number, result: ConsolidateResult, sourceIds?: string[]): Promise<boolean> {
+  async applyConsolidation(revision: number, result: ConsolidateResult, sourceIds?: string[], includedMemoryIds?: string[]): Promise<boolean> {
     return this.mutate(state => {
       if (state.revision !== revision) return false;
       const permitted = new Set(state.sessions.filter(s => s.summaryStatus === 'ready' && !state.excludedSourceIds.includes(s.id) && (!sourceIds || sourceIds.includes(s.id))).map(s => s.id));
       const previous = new Map(state.memories.map(item => [keyOf(item.kind, item.text), item]));
-      state.memories = state.memories.filter(item => !item.sourceSessionIds.length || !item.sourceSessionIds.every(id => permitted.has(id)));
+      const provided = includedMemoryIds ? new Set(includedMemoryIds) : null;
+      state.memories = state.memories.filter(item => (provided && !provided.has(item.id)) || !item.sourceSessionIds.length || !item.sourceSessionIds.every(id => permitted.has(id)));
       this.merge(state, result.memories, permitted);
       state.memories = state.memories.map(item => {
         const prior = previous.get(keyOf(item.kind, item.text));

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ConsolidateRequest, ConsolidateResult, Language, RespondRequest, RespondResult, SpeechPlan, SummarizeRequest, SummarizeResult, UserSettings } from '../shared/types';
 import { WhiteMoodController } from '../src/core/controller';
 import type { ControllerDependencies } from '../src/core/controller';
+import { ApiError } from '../src/core/api';
 import { MemoryStore } from '../src/memory/store';
 
 function deferred<T>() {
@@ -268,5 +269,68 @@ describe('call orchestration uses real lifecycle boundaries', () => {
     pending.resolve({ summary: { text: 'An obsolete summary', selfReported: [], preferences: [], followUp: [] }, memories: [] });
     await vi.waitFor(() => expect(test.controller.getSnapshot().memoryBusy).toBe(false));
     expect(test.commit).not.toHaveBeenCalled();
+  });
+
+  it('resumes after a summary quota failure without repeating already successful blocks', async () => {
+    const test = await setup(); const id = crypto.randomUUID();
+    const messages = Array.from({ length: 2 }, (_, index) => [
+      { id: `u${index}`, role: 'user' as const, text: '中文'.repeat(250), timestamp: index * 2 },
+      { id: `a${index}`, role: 'assistant' as const, text: '한국어'.repeat(70), spokenText: '한국어'.repeat(70), timestamp: index * 2 + 1 },
+    ]).flat();
+    await test.store.saveSession({ id, language: 'zh', startedAt: Date.now() - 1000, endedAt: Date.now(), summaryStatus: 'pending', messages });
+    await test.controller.initialize();
+    const part = (text: string): SummarizeResult => ({ summary: { text, selfReported: [text], preferences: [], followUp: [] }, memories: [{ kind: 'event', text, sourceSessionIds: [id] }] });
+    test.api.summarize.mockResolvedValueOnce(part('First successful block')).mockRejectedValueOnce(new ApiError('rate_limited', 60));
+    test.controller.updateSettings({ memoryEnabled: true });
+    await vi.waitFor(() => { expect(test.api.summarize).toHaveBeenCalledTimes(2); expect(test.controller.getSnapshot().memoryBusy).toBe(false); });
+    expect(test.commit).not.toHaveBeenCalled();
+    expect(test.controller.getSnapshot().sessions.find(session => session.id === id)?.summaryStatus).toBe('failed');
+    test.api.summarize.mockResolvedValueOnce(part('Second resumed block'));
+    await test.controller.retrySummary(id);
+    expect(test.api.summarize.mock.calls.map(([request]) => request.messages.map(message => message.id))).toEqual([['u0', 'a0'], ['u1', 'a1'], ['u1', 'a1']]);
+    const saved = (await test.store.read()).sessions.find(session => session.id === id);
+    expect(saved?.summary?.text).toBe('First successful block\nSecond resumed block');
+    expect(saved?.summary?.selfReported).toEqual(['First successful block', 'Second resumed block']);
+    expect(test.commit).toHaveBeenCalledOnce();
+  });
+
+  it.each(['off-on', 'version', 'delete', 'dispose'] as const)('invalidates an in-flight summary checkpoint after %s', async action => {
+    const test = await setup(); const id = crypto.randomUUID(); const second = deferred<SummarizeResult>();
+    const messages = Array.from({ length: 2 }, (_, index) => ({ id: `long-u${index}`, role: 'user' as const, text: '中'.repeat(1000), timestamp: index }));
+    const record = { id, language: 'zh' as const, startedAt: Date.now() - 1000, endedAt: Date.now(), summaryStatus: 'pending' as const, messages };
+    await test.store.saveSession(record); await test.controller.initialize();
+    test.api.summarize.mockResolvedValueOnce({ summary: { text: 'Old first block', selfReported: [], preferences: [], followUp: [] }, memories: [] }).mockImplementationOnce(() => second.promise);
+    test.controller.updateSettings({ memoryEnabled: true });
+    await vi.waitFor(() => expect(test.api.summarize).toHaveBeenCalledTimes(2));
+    if (action === 'off-on') { test.controller.updateSettings({ memoryEnabled: false }); test.controller.updateSettings({ memoryEnabled: true }); }
+    if (action === 'version') {
+      await test.store.saveSession({ ...record, messages: [{ ...messages[0], text: 'New version. ' + messages[0].text }, messages[1]] });
+      await test.controller.initialize();
+    }
+    if (action === 'delete') await test.controller.deleteSession(id);
+    if (action === 'dispose') test.controller.dispose();
+    second.resolve({ summary: { text: 'Obsolete second block', selfReported: [], preferences: [], followUp: [] }, memories: [] });
+    await vi.waitFor(() => expect(test.controller.getSnapshot().memoryBusy).toBe(false));
+    expect(test.commit).not.toHaveBeenCalled();
+    if (action === 'off-on' || action === 'version') {
+      await test.controller.retrySummary(id);
+      expect(test.api.summarize.mock.calls[2][0].messages[0].id).toBe('long-u0');
+      expect(test.api.summarize).toHaveBeenCalledTimes(4);
+    }
+  });
+
+  it('projects at most32 source IDs into a response without altering the retained memory', async () => {
+    const test = await setup();
+    for (let index = 0; index < 33; index++) {
+      const id = `source-${index}`;
+      await test.store.saveSession({ id, language: 'en', startedAt: index, endedAt: index + 1, summaryStatus: 'pending', messages: [] });
+      await test.store.commitSummary(id, { summary: { text: 'Short replies', selfReported: [], preferences: ['Short replies'], followUp: [] }, memories: [{ kind: 'preference', text: 'Prefers short replies', sourceSessionIds: [id] }] });
+    }
+    await test.controller.initialize(); test.controller.updateSettings({ memoryEnabled: true }); await test.controller.startCall();
+    const turn = test.controller.sendText('Please remember short replies'); await flush();
+    expect(test.api.respond.mock.calls[0][0].memories[0].sourceSessionIds).toEqual(Array.from({ length: 32 }, (_, index) => `source-${index + 1}`));
+    expect(test.controller.getSnapshot().memories[0].sourceSessionIds).toHaveLength(33);
+    expect((await test.store.read()).memories[0].sourceSessionIds).toHaveLength(33);
+    test.playback[0].resolve(); await turn;
   });
 });

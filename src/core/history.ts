@@ -19,13 +19,26 @@ export function heardHistory(messages: ChatMessage[]): ChatMessage[] {
 }
 
 export function summaryChunks(messages: ChatMessage[]): ChatMessage[][] {
-  const chunks: ChatMessage[][] = []; let chunk: ChatMessage[] = []; let chars = 0;
+  const encoder = new TextEncoder();
+  const groups: ChatMessage[][] = [];
   for (const message of heardMessages(messages)) {
-    const cost = message.text.length + (message.spokenText?.length ?? 0);
-    if (message.role === 'user' && chunk.length && (chunk.length >= 60 || chars + cost > 32_000)) { chunks.push(chunk); chunk = []; chars = 0; }
-    chunk.push(message); chars += cost;
+    if (message.role === 'user') groups.push([message]);
+    else if (groups.length) groups[groups.length - 1].push(message);
+    else throw new Error('A summary cannot invent a user turn for assistant-only content.');
   }
-  if (chunk.some(message => message.role === 'user')) chunks.push(chunk);
+  const chunks: ChatMessage[][] = []; let chunk: ChatMessage[] = []; let bytes = 0;
+  for (const group of groups) {
+    const chars = group.reduce((sum, message) => sum + message.text.length + (message.spokenText?.length ?? 0), 0);
+    if (group.length > 80 || chars > 48_000 || group.some(message => message.text.length > 6000 || (message.spokenText?.length ?? 0) > 6000)) {
+      throw new Error('A complete conversation turn exceeds the summary API limits (6000 characters per message, 80 messages and 48000 weighted characters per request). Original content was not truncated.');
+    }
+    // UTF-8 budgeting keeps Chinese/Korean inputs smaller than a character-only limit.
+    // A single complete user/assistant group may exceed this soft budget; its provenance stays intact.
+    const cost = group.reduce((sum, message) => sum + encoder.encode(message.text).byteLength + encoder.encode(message.spokenText ?? '').byteLength, 0);
+    if (chunk.length && (bytes + cost > 4000 || chunk.length + group.length > 60)) { chunks.push(chunk); chunk = []; bytes = 0; }
+    chunk.push(...group); bytes += cost;
+  }
+  if (chunk.length) chunks.push(chunk);
   return chunks;
 }
 
