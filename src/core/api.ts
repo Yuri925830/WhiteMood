@@ -1,0 +1,50 @@
+import type { ApiErrorBody, ConsolidateRequest, ConsolidateResult, Language, RespondRequest, RespondResult, ServiceHealth, SummarizeRequest, SummarizeResult } from '../../shared/types';
+
+export class ApiError extends Error {
+  constructor(public code: string, public retryAfter = 0) { super(code); this.name = 'ApiError'; }
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  let response: Response;
+  try { response = await fetch(path, { ...init, credentials: 'same-origin' }); }
+  catch (error) { if ((error as Error).name === 'AbortError') throw error; throw new ApiError('network'); }
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as ApiErrorBody | null;
+    const code = body?.error?.code?.toLowerCase() ?? (response.status === 429 ? 'rate_limited' : 'provider_error');
+    throw new ApiError(code, body?.error?.retryAfter ?? Number(response.headers.get('retry-after') || 0));
+  }
+  return await response.json() as T;
+}
+
+function json<T>(path: string, body: unknown, signal?: AbortSignal) {
+  return request<T>(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
+}
+
+export const api = {
+  health: (signal?: AbortSignal) => request<ServiceHealth>('/api/health', { signal }),
+  transcribe: (audio: Blob, language: Language, signal?: AbortSignal) => {
+    const form = new FormData(); form.append('file', audio, 'utterance.wav'); form.append('language', language);
+    return request<{ text: string }>('/api/transcribe', { method: 'POST', body: form, signal });
+  },
+  respond: (body: RespondRequest, signal?: AbortSignal) => json<RespondResult>('/api/respond', body, signal),
+  summarize: (body: SummarizeRequest, signal?: AbortSignal) => json<SummarizeResult>('/api/summarize', body, signal),
+  consolidate: (body: ConsolidateRequest, signal?: AbortSignal) => json<ConsolidateResult>('/api/memory/consolidate', body, signal),
+};
+
+export function errorKey(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (/config|unavailable|missing_key|not_configured/.test(error.code)) return 'service_unavailable';
+    if (/rate|quota/.test(error.code)) return 'rate_limited';
+    if (/network|timeout/.test(error.code)) return 'network';
+    return 'provider_error';
+  }
+  if (error instanceof Error) {
+    if (error.name === 'NotAllowedError' || error.name === 'SecurityError') return 'microphone_denied';
+    if (error.name === 'NotFoundError' || error.name === 'NotReadableError') return 'microphone_missing';
+    if (/voice|locale|language/i.test(error.message)) return 'voice_unavailable';
+    if (/unsupported|AudioWorklet|secure context/i.test(error.message)) return 'audio_unsupported';
+  }
+  return 'unknown';
+}
+
+export const aborted = (error: unknown) => error instanceof Error && error.name === 'AbortError';
