@@ -1,6 +1,6 @@
 # WhiteMood 语音陪伴
 
-正式入口：Cloudflare Pages 独立免费网址，待首次发布返回地址后记录。
+正式入口：[https://whitemood-yuri.pages.dev](https://whitemood-yuri.pages.dev)。
 
 Cloudflare 部署说明：[DEPLOY_CLOUDFLARE.md](DEPLOY_CLOUDFLARE.md)。
 
@@ -8,7 +8,7 @@ Cloudflare 部署说明：[DEPLOY_CLOUDFLARE.md](DEPLOY_CLOUDFLARE.md)。
 
 ## 部署运行
 
-- 生产密钥在 Sites runtime secrets 中配置，不在源文件、本地构建或网页中。
+- 独立生产环境的密钥保存在 Cloudflare `whitemood` Worker 的加密 secrets 中，不在源文件、本地构建、Pages 代理或网页中。旧 Sites 环境保留自己的独立配置。
 - `GROQ_API_KEY`：Groq 服务端密钥。
 - `SITE_ORIGIN`：本站唯一 HTTPS origin，无结尾斜杠。
 - `SESSION_SECRET`：服务端匿名 cookie 签名密钥，随机生成后保存在 runtime secret。
@@ -19,7 +19,7 @@ Cloudflare 部署说明：[DEPLOY_CLOUDFLARE.md](DEPLOY_CLOUDFLARE.md)。
 - 登录使用 12 小时 HttpOnly、Secure、SameSite Cookie，数据库只保存令牌哈希。退出即时撤销当前会话。
 - AI 接口逐次验证 WhiteMood 登录，D1 保存账号/全站的窗口调用次数；不保存音频、对话文字或 IP。
 - 全站限额为每分钟 12 次、每日 200 次 AI 请求；单账号每分钟 10 次、每日 80 次。转写、回应与摘要分别计数；服务商自身限额仍有效。
-- 记忆与记忆同意设置按稳定账号 UUID 在当前浏览器中隔离，不做跨设备同步。退出后通话卸载，停止麦克风。新域名有独立的浏览器存储，不迁移旧 localhost 数据。
+- 记忆与记忆同意设置按稳定账号 UUID 在当前浏览器中隔离，不做跨设备同步。退出后通话卸载，停止麦克风。新域名有独立的浏览器存储，不自动迁移旧 Sites 域名或 localhost 的对话与状态记录。
 
 本地构建与测试需要 Node 24 和 pnpm 11.25.0：
 
@@ -30,7 +30,9 @@ pnpm typecheck
 pnpm build
 ```
 
-Sites 发布使用官方 source/build helper，保留 `build/sites-vite-plugin.ts` 与 `build/sites-worker.ts`。`server/hosted.ts` 复用标准 Fetch API；`server/index.ts` 仅为原本地 Node 适配器，不在生产运行。
+独立发布分两部分：应用构建后由 `scripts/prepare-cloudflare.mjs` 生成 Worker 配置，发布到 `whitemood` Worker；`pnpm run deploy:pages` 只发布 `cloudflare-pages/` 品牌入口代理，通过私有 `WHITEMOOD_APP` 绑定调用应用，保留请求 origin、Cookie 和请求体。真实静态资源由 Worker 的 `ASSETS` 绑定提供，密码哈希由私有 SQLite Durable Object 执行。完整步骤见 [Cloudflare 部署说明](DEPLOY_CLOUDFLARE.md)。
+
+原 Sites 部署可继续使用其官方 source/build helper，保留 `build/sites-vite-plugin.ts` 与 `build/sites-worker.ts`。`server/hosted.ts` 复用标准 Fetch API；`server/index.ts` 仅为原本地 Node 适配器，不在独立生产环境运行。两个部署的发布配置、数据库和 secrets 独立，不能相互替换。
 
 `pnpm dev` 提供本地框架预览，未启用模拟登录。网站直接公开展示自己的 ID/密码注册与登录页，不跳转 ChatGPT。Groq 调用仍受账号免费额度影响，无付费自动回退。
 

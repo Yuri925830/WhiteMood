@@ -2,7 +2,9 @@
 
 此部署使用团队自己的 Cloudflare 账户、Pages、Workers 和 D1，不依赖 `chatgpt.site` 访问入口。用户仍使用 WhiteMood 自己的 ID 与密码；不会出现 ChatGPT 登录。现有 Sites 部署和 `.openai/hosting.json` 保留，两个部署有各自独立的数据库和密钥。
 
-公开入口使用独立的 WhiteMood Pages 项目，项目名暂定 `whitemood-yuri`，最终 URL 必须以 Pages 创建和发布结果为准，当前文档不将待创建的项目名当作已可访问地址。Pages 通过私有 `WHITEMOOD_APP` service binding 调用 `whitemood` Worker，浏览器始终留在 WhiteMood 域名，无须跳转后端 Worker 的账户子域名。
+公开入口：[https://whitemood-yuri.pages.dev](https://whitemood-yuri.pages.dev)，对应已创建的独立 Pages 项目 `whitemood-yuri`。Pages 通过私有 `WHITEMOOD_APP` service binding 调用 `whitemood` Worker，浏览器始终留在 WhiteMood 域名，无须跳转后端 Worker 的账户子域名。
+
+2026-10-19 已完成首次 Pages 发布，Cloudflare 返回的部署地址为 [53d3072a.whitemood-yuri.pages.dev](https://53d3072a.whitemood-yuri.pages.dev)，公开入口仍统一使用上面的正式域名。Worker 的 `SITE_ORIGIN` 已更新为正式 Pages origin；接口及浏览器验收结果单独记录在 [验收记录](docs/ACCEPTANCE.md)，发布成功本身不等于完成全部实机验收。
 
 2026-10-19 已将原站的 2 个账号记录迁入独立 D1，保留账号 ID 和原有密码哈希，用户继续使用原密码。会话 Cookie 和浏览器里的心理状态记录受域名隔离，需要在新域名重新登录；旧域名的本地记录不会自动出现在新域名。
 
@@ -53,7 +55,7 @@ pnpm exec wrangler secret put SITE_ORIGIN --config dist/cloudflare/wrangler.json
 pnpm exec wrangler deploy --config dist/cloudflare/wrangler.json
 ```
 
-`SESSION_SECRET` 使用密码学随机生成的至少 32 字节值。`SITE_ORIGIN` 设置为最终公开 Pages 的 HTTPS origin，不加末尾 `/`，待真实 Pages 发布地址确认后更新。正式域名变更后同步更新该项。Groq 默认模型为 `openai/gpt-oss-120b` 和 `whisper-large-v3-turbo`；如需更换，可在服务端配置 `GROQ_CHAT_MODEL`、`GROQ_STT_MODEL`。没有付费 AI 自动回退。现有 Worker 的密钥已经设置时，常规代码发布无需重新输入或轮换它们。Pages 只持有内部服务绑定，不复制 Groq 密钥或会话签名密钥。
+`SESSION_SECRET` 使用密码学随机生成的至少 32 字节值。`SITE_ORIGIN` 设置为 `https://whitemood-yuri.pages.dev`，不加末尾 `/`。正式域名变更后同步更新该项。Groq 默认模型为 `openai/gpt-oss-120b` 和 `whisper-large-v3-turbo`；如需更换，可在服务端配置 `GROQ_CHAT_MODEL`、`GROQ_STT_MODEL`。没有付费 AI 自动回退。现有 Worker 的密钥已经设置时，常规代码发布无需重新输入或轮换它们。Pages 只持有内部服务绑定，不复制 Groq 密钥或会话签名密钥。
 
 首次 Worker 尚未存在时，`secret put` 可能提示创建 Worker；按真实目标名称完成初始化后再发布。可先执行 `wrangler deploy --dry-run --config dist/cloudflare/wrangler.json` 验证构建和资源打包，该命令不会发布站点。
 
@@ -61,14 +63,19 @@ pnpm exec wrangler deploy --config dist/cloudflare/wrangler.json
 
 `cloudflare-pages/wrangler.jsonc` 单独声明品牌项目和私有 `WHITEMOOD_APP` → `whitemood` 绑定。`public/_worker.js` 原样传递请求及响应，保留请求体、公开 origin、Cookie 和流式响应；绑定缺失或调用失败时返回 503，不以假页面遮盖服务问题。`_routes.json` 让全部路径经过真实应用。此目录没有假的静态首页，也没有前端写死的后端域名。
 
-确认 Pages 账号权限以及项目名可用后，创建并发布（若项目已存在则复用，不重复创建）：
+当前 Pages 项目已创建且 OAuth 权限已补齐。后续发布直接复用它：
 
 ```sh
-pnpm exec wrangler --cwd cloudflare-pages pages project create whitemood-yuri --production-branch main
-pnpm exec wrangler --cwd cloudflare-pages pages deploy --project-name whitemood-yuri --branch main
+pnpm run deploy:pages
 ```
 
-使用 `--cwd cloudflare-pages` 是为了选中 Pages 自己的配置，不能拿 Worker 的 `dist/cloudflare/wrangler.json` 部署 Pages。若项目名被占用，更新 Pages 配置和上述项目名，采用创建结果提供的真实 URL。若 OAuth 缺少 Pages 权限，应补充真实账号授权，不能用静态页面假装发布成功。若已有团队自己的托管域名，也可以在 Pages 的 Custom domains 添加后更新 `SITE_ORIGIN`；不要改动其他现有项目的 DNS 或账户级 Worker 子域名。
+应用或 API 代码变更时先重新构建并发布 Worker；只有 Pages 代理或其服务绑定配置变更时，才需要重新发布 Pages。两者分开发布，不会将旧 Sites 环境同步覆盖。
+
+`scripts/deploy-pages.mjs` 将 Pages 配置和 `public/` 原样复制到仓库外的临时目录，从该目录运行项目已安装的 Wrangler，并在完成或失败后清理临时副本。这避开 Vinext 生成的祖先 `.wrangler/deploy/config.json` 被误用于 Pages 的发现问题；仅用 `--cwd cloudflare-pages` 仍会遇到此冲突。脚本继承真实账号登录环境、原样显示发布结果，不创建项目，也不读取或写入密钥。
+
+Pages 配置不接受 `account_id` 字段，因此该值不写入 Pages 的 Wrangler 文件。脚本在 `CLOUDFLARE_ACCOUNT_ID` 未设置时，默认使用团队账户 `0e8e7f0429306f575ea08b61a74dfc87`；已有环境值优先。此账户标识不是密钥，实际访问权限仍由真实 Wrangler 登录凭据决定。
+
+不能拿 Worker 的 `dist/cloudflare/wrangler.json` 部署 Pages。另建环境时，需要先创建独立的 Pages 项目，更新 Pages 配置和 `SITE_ORIGIN`，并使用创建结果提供的真实域名。若已有团队自己的托管域名，也可以在 Pages 的 Custom domains 添加后更新 `SITE_ORIGIN`；不要改动其他现有项目的 DNS 或账户级 Worker 子域名。
 
 独立部署可去除 `chatgpt.site` 域名依赖，但无法据此保证中国大陆所有运营商和网络都能稳定访问 Cloudflare 或 Groq。需要用目标地区的真实网络测试首页、注册登录、语音识别和回复。不要把韩国网络上的成功测试写成中国大陆可用的证明。
 
