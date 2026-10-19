@@ -5,8 +5,8 @@ export const metadata: Metadata = {
   title: "WhiteMood · 让心情，有处安放",
   description: "中文、English、한국어。点一下开始，按自己的节奏说话。",
   icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
+    icon: "/brand/whitemood-icon.png",
+    shortcut: "/brand/whitemood-icon.png",
   },
 };
 

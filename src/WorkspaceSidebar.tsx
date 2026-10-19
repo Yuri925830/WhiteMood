@@ -14,7 +14,7 @@ const navPaths: Record<WorkspaceView, string> = {
   account: 'M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM4 21v-2a8 8 0 0 1 16 0v2',
 };
 function NavIcon({ name }: { name: WorkspaceView }) {
-  return <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={navPaths[name]} /></svg>;
+  return <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={navPaths[name]} /></svg>;
 }
 
 export default function WorkspaceSidebar({ model, user, account, view, onNavigate, open, onClose }: {
@@ -38,13 +38,36 @@ export default function WorkspaceSidebar({ model, user, account, view, onNavigat
 
   function contents(mobile: boolean) {
     return <>
-      <div className="sidebar-heading"><button className="sidebar-brand" disabled={account.busy} onClick={() => { onNavigate('call'); onClose(); }} aria-label="WhiteMood"><Cloud className="sidebar-cloud" /><span>WhiteMood<small>{translations[model.settings.language].brandNote}</small></span></button>{mobile && <button className="icon-button" onClick={onClose} aria-label={t.closeMenu}><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button>}</div>
-      <nav className="sidebar-links" aria-label={t.navigation}>{(['call', 'records', 'privacy', 'account'] as WorkspaceView[]).map(item => <button key={item} type="button" disabled={account.busy} aria-current={view === item ? 'page' : undefined} onClick={() => { onNavigate(item); onClose(); }}><NavIcon name={item} /><span>{t[item]}</span>{item === 'call' && active && <span className="sidebar-live" aria-label={t.ongoing} />}</button>)}</nav>
-      <div className="sidebar-bottom"><p className="sidebar-storage">{t.storage}</p><div className="sidebar-account"><span className="account-initial" aria-hidden="true">{user.id.slice(0, 1).toUpperCase()}</span><div><small>{t.signedIn}</small><span title={user.id}>{user.id}</span></div></div>{account.error && <p className="sidebar-error" role="alert">{account.error}</p>}<button className="sidebar-logout" type="button" disabled={account.busy} onClick={() => void account.logout()}>{account.busy ? t.loggingOut : t.logout}<span aria-hidden="true">↗</span></button></div>
+      <div className="sidebar-heading">
+        <button className="sidebar-brand" type="button" disabled={account.busy} onClick={() => { onNavigate('call'); onClose(); }} aria-label="WhiteMood">
+          <Cloud className="sidebar-cloud" sizes="64px" />
+          <span>WhiteMood<small>{translations[model.settings.language].brandNote}</small></span>
+        </button>
+        {mobile && <button className="sidebar-close icon-button" type="button" onClick={onClose} aria-label={t.closeMenu}><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg></button>}
+      </div>
+      <nav className="sidebar-links" aria-label={t.navigation}>
+        {(['call', 'records', 'privacy', 'account'] as WorkspaceView[]).map(item => <button key={item} type="button" disabled={account.busy} aria-current={view === item ? 'page' : undefined} onClick={() => { onNavigate(item); onClose(); }}>
+          <span className="sidebar-nav-icon"><NavIcon name={item} /></span>
+          <span className="sidebar-nav-label">{t[item]}</span>
+          {item === 'call' && active ? <span className="sidebar-live" role="status"><span className="sr-only">{t.ongoing}</span></span> : view === item && <svg className="sidebar-nav-current" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg>}
+        </button>)}
+      </nav>
+      <div className="sidebar-bottom">
+        <p className="sidebar-storage"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3" /><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" /></svg><span>{t.storage}</span></p>
+        <div className="sidebar-account-card">
+          <button className="sidebar-account" type="button" disabled={account.busy} aria-label={`${t.account}: ${user.id}`} onClick={() => { onNavigate('account'); onClose(); }}>
+            <span className="account-initial" aria-hidden="true">{user.id.slice(0, 1).toUpperCase()}</span>
+            <span className="sidebar-account-identity"><small>{t.signedIn}</small><span title={user.id}>{user.id}</span></span>
+            <svg className="sidebar-account-arrow" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 5 7 7-7 7" /></svg>
+          </button>
+          {account.error && <p className="sidebar-error" role="alert">{account.error}</p>}
+          <button className="sidebar-logout" type="button" disabled={account.busy} onClick={() => void account.logout()}><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4M14 8l4 4-4 4M9 12h9" /></svg><span>{account.busy ? t.loggingOut : t.logout}</span></button>
+        </div>
+      </div>
     </>;
   }
   return <>
     <aside className="workspace-sidebar" aria-label={t.navigation}>{contents(false)}</aside>
-    <dialog className="sidebar-dialog" ref={dialog} onClose={onClose} aria-label={t.navigation}>{contents(true)}</dialog>
+    <dialog className="sidebar-dialog" ref={dialog} onCancel={onClose} onClose={onClose} aria-label={t.navigation}>{contents(true)}</dialog>
   </>;
 }

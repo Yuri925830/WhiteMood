@@ -1,12 +1,12 @@
-.voice-diagnostics { width: min(100%, 390px); margin: 18px auto 0; color: var(--text-secondary, #54768d); text-align: center; font-size: 12px; line-height: 1.65; }
+.voice-diagnostics { width: min(100%, 390px); margin: 18px auto 0; color: var(--muted); text-align: center; font-size: 13px; line-height: 1.8; }
 .voice-input-status { margin: 0 0 8px; min-height: 20px; }
 .voice-input-meter { display: block; width: 128px; height: 7px; margin: 0 auto 9px; border: 0; border-radius: 99px; overflow: hidden; background: #e0edf6; }
 .voice-input-meter::-webkit-meter-bar { background: #e0edf6; border: 0; border-radius: 99px; }
 .voice-input-meter::-webkit-meter-optimum-value { background: #80b8e0; border-radius: 99px; transition: width 80ms linear; }
 .voice-input-meter::-moz-meter-bar { background: #80b8e0; border-radius: 99px; }
 .voice-input-help { margin-top: 7px; }
-.voice-input-help summary { display: inline-block; cursor: pointer; text-decoration: underline; text-decoration-color: #b5d1e5; text-underline-offset: 3px; }
-.voice-input-help[open] { padding: 12px 16px; border: 1px solid #d7e7f2; border-radius: 15px; background: #f5faff; }
+.voice-input-help summary { display: inline-flex; align-items: center; min-height: 44px; cursor: pointer; text-decoration: underline; text-decoration-color: #b5d1e5; text-underline-offset: 4px; }
+.voice-input-help[open] { padding: 12px 16px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); }
 .voice-input-help p { margin: 9px 0; text-align: left; overflow-wrap: anywhere; }
 .voice-input-help .text-button { margin: 3px auto; }
 .voice-input-device { font-weight: 500; }
