@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { AppModel } from './core/model';
 import type { ChatMessage, Language, SessionRecord } from '../shared/types';
 import { errorText, languageNames, localeNames, translations } from './i18n';
@@ -111,7 +111,6 @@ export default function App({ model, user, account }: { model: AppModel; user: A
   const busy = ['connecting', 'transcribing', 'thinking'].includes(model.status);
   const configured = model.service?.configured === true;
   const duration = `${Math.floor(model.elapsedSeconds / 60).toString().padStart(2, '0')}:${Math.floor(model.elapsedSeconds % 60).toString().padStart(2, '0')}`;
-  const level = Number.isFinite(model.level) ? Math.max(0, Math.min(1, model.level)) : 0;
   const status = model.status === 'listening' && model.microphone.status === 'starting' ? t.connecting : model.muted && model.status === 'listening' ? t.muted : t[model.status];
   const canSend = !account.busy && configured && text.trim().length > 0 && !busy && !sending;
 
@@ -137,7 +136,7 @@ export default function App({ model, user, account }: { model: AppModel; user: A
 
   return <div className="workspace"><WorkspaceSidebar model={model} user={user} account={account} view={view} onNavigate={setView} open={menuOpen} onClose={closeMenu} /><div className="workspace-content"><div className="app-shell">
     <header className="header">
-      <div className="workspace-heading"><button className="sidebar-menu-button" aria-label={w.menu} aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><span>{w[view]}</span></div>
+      <div className="workspace-heading"><button className="sidebar-menu-button" aria-label={w.menu} aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg></button><span className="header-wordmark">WhiteMood</span><span className="header-current">{w[view]}</span></div>
       <nav className="header-actions" aria-label={t.language}>
         <label className="language-select"><span className="sr-only">{t.language}</span><select value={model.settings.language} disabled={active} onChange={event => model.setLanguage(event.target.value as Language)}>{Object.entries(languageNames).map(([code, name]) => <option key={code} value={code}>{name}</option>)}</select><Icon name="chevron" size={14} /></label>
       </nav>
@@ -148,12 +147,11 @@ export default function App({ model, user, account }: { model: AppModel; user: A
       <section className="conversation-stage" aria-label={t.voiceLabel}>
         <div className="stage-heading"><span className="eyebrow companion-label"><Icon name="cloud" size={17} />{t.companion}</span><h1>{active ? t.activeTitle : t.heroTitle}</h1><p>{active ? t.activeSubtitle : t.heroSubtitle}</p></div>
 
-        <div className={`voice-visual visual-${model.status} ${model.muted ? 'visual-muted' : ''}`} style={{ '--level': level } as CSSProperties} aria-hidden="true">
-          <div className="cloud-sky" />
-          <Cloud className="hero-cloud" />
-          <div className="cloud-listening-lines"><span /><span /><span /></div>
+        <div className={`voice-visual visual-${model.status}`} aria-hidden="true">
+          <Cloud className="hero-cloud" priority sizes="(max-width: 600px) 88vw, 480px" />
         </div>
 
+        <div className="call-console">
         <div className="call-status"><div className="status-line" role="status" aria-live="polite"><span className={`status-dot ${active ? 'is-active' : ''}`} />{status}</div><div className="status-meta">{active || model.elapsedSeconds > 0 ? <time aria-label={`${t.elapsed} ${duration}`}>{duration}</time> : <span>{t.aiLabel}</span>}</div></div>
 
         <div className="call-controls">
@@ -165,6 +163,8 @@ export default function App({ model, user, account }: { model: AppModel; user: A
         {!configured && !active && <div className="service-notice" role="status"><span>{model.service === null && !model.error ? t.serviceChecking : t.serviceOffline}</span>{(model.service !== null || model.error) && <><p>{t.serviceDetail}</p><button className="text-button" disabled={refreshing} onClick={() => void reconnect()}><Icon name="refresh" size={14} />{t.retry}</button></>}</div>}
 
         <div className="call-options"><button className={`caption-button ${textExpanded ? 'selected' : ''}`} aria-expanded={textExpanded} aria-controls="text-fallback" onClick={() => setTextExpanded(value => !value)}><Icon name="text" size={16} />{textExpanded ? t.hideText : t.useText}</button>{(active || model.messages.length > 0) && <><span className="option-divider" /><button className={`caption-button ${model.settings.captions ? 'selected' : ''}`} aria-pressed={model.settings.captions} aria-label={model.settings.captions ? t.hideCaptions : t.showCaptions} onClick={() => model.updateSettings({ captions: !model.settings.captions })}>{t.captions}</button></>}</div>
+
+        </div>
 
         {model.error && <div className="error-notice" role="alert"><div><strong>{t.errorTitle}</strong><p>{errorText(model.error, model.settings.language)}</p></div><button className="icon-button" aria-label={t.dismiss} onClick={model.clearError}><Icon name="close" size={16} /></button></div>}
 

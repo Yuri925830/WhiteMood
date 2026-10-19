@@ -154,11 +154,15 @@ export default function AccountSettings({ user, language, active, onUpdate }: Ac
   };
 
   return <section className="account-settings" aria-labelledby={`${prefix}-title`}>
-    <div className="account-settings-heading"><h2 id={`${prefix}-title`}>{t.title}</h2><p>{t.intro}</p></div>
+    <div className="account-settings-heading">
+      <span className="account-settings-heading-icon" aria-hidden="true"><svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="3.5" /><path d="M5 21v-2a7 7 0 0 1 14 0v2" /></svg></span>
+      <div><h2 id={`${prefix}-title`}>{t.title}</h2><p>{t.intro}</p></div>
+    </div>
     {active && <p className="account-settings-call-notice" role="status">{t.active}</p>}
     <form onSubmit={event => void submit(event)} aria-busy={pending}>
       <fieldset disabled={active || pending}>
-        <div className="account-settings-field">
+        <div className="account-settings-fields">
+        <div className="account-settings-field account-settings-field-id">
           <label htmlFor={`${prefix}-id`}>{t.id}</label>
           <input id={`${prefix}-id`} name="username" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={draftId} onChange={event => { setDraftId(event.target.value); clearFeedback(); }} required aria-describedby={`${prefix}-id-hint`} aria-invalid={error === 'INVALID_ID' || error === 'ID_TAKEN'} />
           <p id={`${prefix}-id-hint`}>{t.idRule}</p>
@@ -173,11 +177,14 @@ export default function AccountSettings({ user, language, active, onUpdate }: Ac
           <input ref={newPassword} id={`${prefix}-new-password`} name="newPassword" type="password" autoComplete="new-password" onChange={clearFeedback} aria-describedby={`${prefix}-new-hint`} aria-invalid={error === 'INVALID_PASSWORD'} />
           <p id={`${prefix}-new-hint`}>{t.newPasswordHint}</p>
         </div>
-        <p className="account-settings-session-note">{t.sessions}</p>
-        <button className="account-settings-save" type="submit">{pending ? t.saving : t.save}</button>
+        </div>
+        <div className="account-settings-actions">
+          <p className="account-settings-session-note"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 3 4 6v5c0 5 8 10 8 10s8-5 8-10V6l-8-3Z" /><path d="m9 12 2 2 4-4" /></svg><span>{t.sessions}</span></p>
+          <button className="account-settings-save" type="submit">{pending ? t.saving : t.save}<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5" /></svg></button>
+        </div>
       </fieldset>
-      {error && <p className="account-settings-error" role="alert">{errorMessage(error, language)}</p>}
-      {saved && <p className="account-settings-success" role="status">{t.saved}</p>}
+      {error && <p className="account-settings-error" role="alert"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 7v6M12 17h.01" /></svg><span>{errorMessage(error, language)}</span></p>}
+      {saved && <p className="account-settings-success" role="status"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="m8 12 3 3 5-6" /></svg><span>{t.saved}</span></p>}
     </form>
   </section>;
 }

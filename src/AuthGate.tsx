@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode } from 'react';
 import Link from 'next/link';
+import { ArrowRight, AudioLines, ChevronDown, LoaderCircle } from 'lucide-react';
 import type { Language } from '../shared/types';
 import { isValidAccountId, normalizeAccountId, validateCredentials } from './auth-validation';
 import Cloud from './Cloud';
@@ -30,6 +31,7 @@ const copy = {
     network: '连接暂时中断，请稍后重试。', rateLimited: '尝试次数较多，请稍后再试。', unavailable: '账号服务暂时不可用，请稍后重试。',
     loading: '正在打开你的空间…', checkingSession: '正在确认登录状态', retry: '重新连接', logout: '退出登录', loggingOut: '正在退出…',
     account: '当前账号', footer: 'AI 语音陪伴 · 不是医疗服务', sessionExpired: '登录已过期，请重新登录。',
+    companion: '你的云朵陪伴', heroTitle: '让心情，有处安放。', heroDescription: '不必组织好语言，也不用急着变好。\n从一句话开始，慢慢聊。', heroCaption: '一点柔软，一直在这里。',
   },
   en: {
     language: 'Language', note: 'A little room for how you feel', welcome: 'Welcome back.', registerTitle: 'A gentle place to begin.',
@@ -42,6 +44,7 @@ const copy = {
     network: 'The connection was interrupted. Please try again.', rateLimited: 'Too many attempts. Please try again later.', unavailable: 'Account services are temporarily unavailable. Please try again later.',
     loading: 'Opening your space…', checkingSession: 'Checking your sign-in', retry: 'Reconnect', logout: 'Sign out', loggingOut: 'Signing out…',
     account: 'Your account', footer: 'AI voice companionship · Not medical care', sessionExpired: 'Your session has expired. Please sign in again.',
+    companion: 'Your cloud companion', heroTitle: 'A little room for how you feel.', heroDescription: 'You don’t need the perfect words.\nStart with a little hello. We can take it slowly.', heroCaption: 'A little softness, right here.',
   },
   ko: {
     language: '언어', note: '마음이 잠시 머무는 곳', welcome: '다시 만나 반가워요.', registerTitle: '여기서, 천천히 시작해요.',
@@ -54,6 +57,7 @@ const copy = {
     network: '연결이 잠시 끊겼어요. 다시 시도해 주세요.', rateLimited: '시도 횟수가 많아요. 잠시 후 다시 시도해 주세요.', unavailable: '계정 서비스를 잠시 이용할 수 없어요. 나중에 다시 시도해 주세요.',
     loading: '나만의 공간을 열고 있어요…', checkingSession: '로그인 상태 확인 중', retry: '다시 연결', logout: '로그아웃', loggingOut: '로그아웃 중…',
     account: '현재 계정', footer: 'AI 음성 대화 친구 · 의료 서비스가 아닙니다', sessionExpired: '로그인이 만료되었어요. 다시 로그인해 주세요.',
+    companion: '나만의 구름 친구', heroTitle: '마음이 잠시 머무는 곳.', heroDescription: '말을 잘 정리하지 않아도 괜찮아요.\n한마디부터, 천천히 이야기해요.', heroCaption: '포근한 마음으로, 여기 있을게요.',
   },
 } satisfies Record<Language, Record<string, string>>;
 
@@ -259,16 +263,29 @@ export default function AuthGate({ children }: { children: (user: AccountUser, a
 
   const idNote = idStatus === 'checking' ? t.checkingId : idStatus === 'available' ? t.available : idStatus === 'taken' ? t.taken : idStatus === 'invalid' ? t.invalidId : idStatus === 'error' ? t.checkFailed : t.idRule;
   return <div className="auth-shell">
-    <header className="auth-header"><Link className="auth-brand" href="/" aria-label="WhiteMood"><Cloud className="auth-brand-cloud" /><span>WhiteMood<small>{t.note}</small></span></Link><label className="auth-language"><span className="sr-only">{t.language}</span><select value={language} onChange={event => selectLanguage(event.target.value as Language)}><option value="zh">简体中文</option><option value="en">English</option><option value="ko">한국어</option></select></label></header>
+    <header className="auth-header">
+      <Link className="auth-brand" href="/" aria-label="WhiteMood"><Cloud className="auth-brand-cloud" sizes="66px" /><span>WhiteMood<small>{t.note}</small></span></Link>
+      <label className="auth-language"><span className="sr-only">{t.language}</span><select value={language} onChange={event => selectLanguage(event.target.value as Language)}><option value="zh">简体中文</option><option value="en">English</option><option value="ko">한국어</option></select><ChevronDown size={15} aria-hidden="true" /></label>
+    </header>
     <main className="auth-main">
-      {boot !== 'ready' ? <section className="auth-loading" aria-label={t.checkingSession} aria-live="polite"><Cloud className="auth-loading-cloud" /><p>{boot === 'loading' ? t.loading : errorMessage(error, language)}</p>{boot === 'failed' && <button className="auth-submit" type="button" onClick={() => { setBoot('loading'); setError(''); void loadSession(); }}>{t.retry}</button>}</section> : <section className="auth-card" aria-labelledby="auth-title">
-        <div className="auth-cloud-welcome"><Cloud className="auth-welcome-cloud" /></div>
-        <span className="eyebrow">WHITE MOOD</span><h1 id="auth-title">{mode === 'login' ? t.welcome : t.registerTitle}</h1><p className="auth-intro">{mode === 'login' ? t.intro : t.registerIntro}</p>
+      <section className="auth-story" aria-label={t.companion}>
+        <span className="auth-companion-label"><AudioLines size={17} aria-hidden="true" />{t.companion}</span>
+        <p className="auth-hero-title">{t.heroTitle}</p>
+        <p className="auth-hero-description">{t.heroDescription}</p>
+        <div className="auth-cloud-welcome"><Cloud className="auth-welcome-cloud" sizes="(max-width: 700px) 260px, (max-width: 900px) 45vw, 590px" /></div>
+        <p className="auth-hero-caption">{t.heroCaption}</p>
+      </section>
+      {boot !== 'ready' ? <section className="auth-card auth-loading" aria-label={t.checkingSession} aria-live="polite">
+        {boot === 'loading' && <LoaderCircle className="auth-spinner" size={22} aria-hidden="true" />}
+        <p>{boot === 'loading' ? t.loading : errorMessage(error, language)}</p>
+        {boot === 'failed' && <button className="auth-submit" type="button" onClick={() => { setBoot('loading'); setError(''); void loadSession(); }}>{t.retry}<ArrowRight size={18} aria-hidden="true" /></button>}
+      </section> : <section className="auth-card" aria-labelledby="auth-title">
+        <span className="auth-card-kicker">WHITE MOOD</span><h1 id="auth-title">{mode === 'login' ? t.welcome : t.registerTitle}</h1><p className="auth-intro">{mode === 'login' ? t.intro : t.registerIntro}</p>
         <form onSubmit={event => void submit(event)} noValidate aria-busy={pending}>
           <div className="auth-field"><label htmlFor="account-id">{t.id}</label><input id="account-id" name="username" type="text" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} required maxLength={24} value={id} disabled={pending} aria-invalid={error === 'INVALID_ID' || mode === 'register' && (idStatus === 'taken' || idStatus === 'invalid')} aria-describedby={mode === 'register' ? 'account-id-note' : undefined} onChange={event => updateId(event.target.value)} onBlur={() => { if (mode === 'register') void checkId(id); }} />{mode === 'register' && <p id="account-id-note" className={`auth-field-note auth-id-${idStatus}`} role="status">{idNote}</p>}</div>
           <div className="auth-field"><label htmlFor="account-password">{t.password}</label><input id="account-password" name="password" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} required minLength={8} maxLength={128} value={password} disabled={pending} aria-invalid={error === 'INVALID_PASSWORD'} aria-describedby={mode === 'register' ? 'account-password-note' : undefined} onChange={event => { setPassword(event.target.value); setError(''); }} />{mode === 'register' && <p id="account-password-note" className="auth-field-note">{t.passwordRule}</p>}</div>
           {error && <p className="auth-error" role="alert">{errorMessage(error, language)}</p>}
-          <button className="auth-submit" type="submit" disabled={pending || !id || !password}>{pending ? mode === 'login' ? t.signingIn : t.signingUp : mode === 'login' ? t.login : t.register}<span aria-hidden="true">→</span></button>
+          <button className="auth-submit" type="submit" disabled={pending || !id || !password}>{pending && <LoaderCircle className="auth-spinner" size={18} aria-hidden="true" />}{pending ? mode === 'login' ? t.signingIn : t.signingUp : mode === 'login' ? t.login : t.register}{!pending && <ArrowRight size={19} aria-hidden="true" />}</button>
         </form>
         <p className="auth-switch">{mode === 'login' ? t.noAccount : t.haveAccount}<button type="button" disabled={pending} onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setIdStatus('idle'); setPassword(''); setError(''); }}>{mode === 'login' ? t.toRegister : t.toLogin}</button></p>
       </section>}
