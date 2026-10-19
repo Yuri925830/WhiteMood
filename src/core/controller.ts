@@ -1,7 +1,8 @@
-import type { CallStatus, ChatMessage, Language, ServiceHealth, SessionRecord, SummarizeResult, UserSettings, VoiceSignals } from '../../shared/types';
+import type { CallStatus, ChatMessage, Language, SessionRecord, SummarizeResult, UserSettings, VoiceSignals } from '../../shared/types';
 import { VoiceCapture } from '../audio/capture';
 import { getAvailableVoices, SpeechOutput } from '../audio/speech';
 import { getCvAdapter, recentCvObservation, subscribeCvAdapter } from '../integrations/cv';
+import type { CvFrame } from '../integrations/cv';
 import type { CvObservation } from '../../shared/types';
 import { MemoryStore, selectMemories } from '../memory/store';
 import { aborted, api, ApiError, errorKey } from './api';
@@ -10,7 +11,7 @@ import { buildConsolidationBatch } from './memoryBudget';
 import type { AppModel } from './model';
 
 export const DEFAULT_SETTINGS: UserSettings = { language: 'zh', rate: 1, silenceMs: 1400, memoryEnabled: false, voiceURI: '', captions: false };
-export type ControllerState = Pick<AppModel, 'settings' | 'status' | 'level' | 'microphone' | 'elapsedSeconds' | 'messages' | 'error' | 'service' | 'sessions' | 'memories' | 'memoryBusy' | 'muted' | 'availableVoices' | 'cvAvailable' | 'cvEnabled'>;
+export type ControllerState = Pick<AppModel, 'settings' | 'status' | 'level' | 'microphone' | 'elapsedSeconds' | 'messages' | 'error' | 'service' | 'sessions' | 'memories' | 'memoryBusy' | 'muted' | 'availableVoices' | 'cvAvailable' | 'cvEnabled' | 'cvInputCount'>;
 
 type CapturePort = Pick<VoiceCapture, 'start' | 'stop' | 'setSilenceMs' | 'setMuted' | 'setSpeaking'>;
 type SpeechPort = Pick<SpeechOutput, 'speak' | 'cancel'>;
@@ -31,7 +32,7 @@ const summarySignature = (record: SessionRecord) => JSON.stringify([record.langu
 export class WhiteMoodController {
   private state: ControllerState = {
     settings: { ...DEFAULT_SETTINGS }, status: 'idle', level: 0, microphone: { status: 'idle' }, elapsedSeconds: 0, messages: [], error: null,
-    service: null, sessions: [], memories: [], memoryBusy: false, muted: false, availableVoices: [], cvAvailable: false, cvEnabled: false,
+    service: null, sessions: [], memories: [], memoryBusy: false, muted: false, availableVoices: [], cvAvailable: false, cvEnabled: false, cvInputCount: 0,
   };
   private listeners = new Set<() => void>();
   private active = false;
@@ -64,6 +65,14 @@ export class WhiteMoodController {
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private patch(next: Partial<ControllerState>) { this.state = { ...this.state, ...next }; this.listeners.forEach(fn => fn()); }
   private status(status: CallStatus) { this.patch({ status }); }
+  private cvIsAvailable() {
+    const adapter = getCvAdapter();
+    return !!adapter && (!adapter.requiresAnalysisService || this.state.service?.analysis?.configured === true);
+  }
+  private syncCvAvailability() {
+    const available = this.cvIsAvailable(); this.patch({ cvAvailable: available });
+    if (!available) { this.cvRun?.abort(); this.cvRun = null; this.cvObservation = null; void getCvAdapter()?.stop(); this.patch({ cvEnabled: false, cvInputCount: 0 }); }
+  }
 
   async initialize(): Promise<void> {
     const lifecycle = ++this.lifecycle; this.attached = true;
@@ -76,11 +85,10 @@ export class WhiteMoodController {
       }
     } catch { /* Private browsing may disable settings persistence. Calls remain available. */ }
     this.refreshVoices();
-    this.patch({ cvAvailable: !!getCvAdapter() });
+    this.syncCvAvailability();
     this.cvCleanup?.();
     this.cvCleanup = subscribeCvAdapter(() => {
-      const available = !!getCvAdapter(); this.patch({ cvAvailable: available });
-      if (!available) { this.cvRun?.abort(); this.cvRun = null; this.cvObservation = null; this.patch({ cvEnabled: false }); }
+      this.syncCvAvailability();
     });
     await Promise.all([this.refreshService(), this.reloadMemory()]);
     if (!this.attached || lifecycle !== this.lifecycle) return;
@@ -120,9 +128,12 @@ export class WhiteMoodController {
 
   updateSettings = (next: Partial<UserSettings>): void => {
     if (this.active) {
-      const { language: _language, voiceURI: _voice, memoryEnabled, ...safe } = next;
+      const safe = { ...next };
+      delete safe.language;
+      delete safe.voiceURI;
+      delete safe.memoryEnabled;
       // Consent can always be withdrawn. Enabling storage begins with the next call.
-      next = memoryEnabled === false ? { ...safe, memoryEnabled: false } : safe;
+      next = next.memoryEnabled === false ? { ...safe, memoryEnabled: false } : safe;
     }
     const settings = this.validSettings({ ...this.state.settings, ...next });
     if (settings.memoryEnabled !== this.state.settings.memoryEnabled) {
@@ -138,8 +149,8 @@ export class WhiteMoodController {
   refreshVoices = () => this.patch({ availableVoices: this.deps.voices(this.state.settings.language).map(voice => ({ id: voice.voiceURI, name: voice.name, local: voice.localService })) });
 
   refreshService = async (): Promise<void> => {
-    try { this.patch({ service: await this.deps.api.health() }); }
-    catch { this.patch({ service: null, error: 'service_unavailable' }); }
+    try { this.patch({ service: await this.deps.api.health() }); this.syncCvAvailability(); }
+    catch { this.patch({ service: null, error: 'service_unavailable' }); this.syncCvAvailability(); }
   };
 
   private beginSession() {
@@ -219,11 +230,19 @@ export class WhiteMoodController {
     this.interrupt(); const generation = this.generation; const request = new AbortController(); this.request = request;
     this.status('transcribing');
     try {
-      const result = await this.deps.api.transcribe(audio, this.state.settings.language, request.signal);
+      let frames: CvFrame[] = [];
+      if (this.state.cvEnabled) {
+        try { frames = await getCvAdapter()?.takeFrames?.() ?? []; }
+        catch { frames = []; }
+        if (frames.length) this.patch({ cvEnabled: false, cvInputCount: 0 });
+      }
+      if (!this.active || generation !== this.generation || request.signal.aborted) return;
+      const result = await this.deps.api.transcribe(audio, this.state.settings.language, request.signal, frames);
       if (!this.active || generation !== this.generation) return;
       const text = result.text.trim();
       if (!text) { this.patch({ microphone: { ...this.state.microphone, status: 'unclear' } }); this.status('listening'); return; }
-      await this.respond(text, signals, generation, request);
+      if (result.cv) this.cvObservation = result.cv;
+      await this.respond(text, result.voice ?? signals, generation, request, result.cv);
     } catch (error) { this.handleTurnError(error, generation); }
   }
 
@@ -238,7 +257,7 @@ export class WhiteMoodController {
     catch (error) { this.handleTurnError(error, generation); }
   };
 
-  private async respond(text: string, voice: VoiceSignals | undefined, generation: number, request: AbortController) {
+  private async respond(text: string, voice: VoiceSignals | undefined, generation: number, request: AbortController, cv?: CvObservation) {
     if (!this.current) return;
     const sessionId = this.current.id;
     const history = heardHistory(this.current.messages);
@@ -254,7 +273,7 @@ export class WhiteMoodController {
     const result = await this.deps.api.respond({ language: this.current.language, text, history,
       memories: this.retainCall && this.state.settings.memoryEnabled
         ? selectMemories(this.state.memories, text).map(memory => ({ ...memory, sourceSessionIds: memory.sourceSessionIds.slice(-32) })) : [],
-      voice, cv: this.state.cvEnabled ? recentCvObservation(this.cvObservation) : undefined,
+      voice, cv: recentCvObservation(cv ?? (this.state.cvEnabled ? this.cvObservation : null)),
     }, request.signal);
     if (!this.active || generation !== this.generation || request.signal.aborted) return;
     const message: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', text: result.reply, timestamp: Date.now(), spokenText: '' };
@@ -417,11 +436,30 @@ export class WhiteMoodController {
   setCvEnabled = async (enabled: boolean): Promise<void> => {
     this.cvRun?.abort(); this.cvRun = null; this.cvObservation = null;
     const adapter = getCvAdapter();
-    if (!enabled || !adapter || !this.active) { await adapter?.stop(); this.patch({ cvEnabled: false }); return; }
+    if (!enabled || !adapter || !this.active || !this.cvIsAvailable()) { await adapter?.stop(); this.patch({ cvEnabled: false, cvInputCount: 0 }); return; }
     const run = new AbortController(); this.cvRun = run;
     try {
       await adapter.start({ signal: run.signal, onObservation: value => { if (!run.signal.aborted) this.cvObservation = value; } });
       if (!run.signal.aborted && this.active) this.patch({ cvEnabled: true }); else await adapter.stop();
-    } catch { run.abort(); await adapter.stop(); this.patch({ cvEnabled: false, error: 'cv_error' }); }
+    } catch { run.abort(); await adapter.stop(); this.patch({ cvEnabled: false, cvInputCount: 0, error: 'cv_error' }); }
+  };
+
+  setCvImages = async (files: File[]): Promise<void> => {
+    this.cvRun?.abort(); this.cvRun = null; this.cvObservation = null;
+    const adapter = getCvAdapter();
+    await adapter?.stop();
+    this.patch({ cvEnabled: false, cvInputCount: 0 });
+    if (!files.length) return;
+    if (!adapter?.setImages || !this.active || !this.cvIsAvailable()) { this.patch({ error: 'cv_error' }); return; }
+    if (files.length < 2 || files.length > 5) { this.patch({ error: 'cv_image_count' }); return; }
+    try {
+      const count = await adapter.setImages(files);
+      if (!this.active || !this.cvIsAvailable()) { await adapter.stop(); return; }
+      this.patch({ cvInputCount: count, error: null });
+      await this.setCvEnabled(true);
+    } catch (error) {
+      await adapter.stop();
+      if (!aborted(error)) this.patch({ cvEnabled: false, cvInputCount: 0, error: 'cv_image_invalid' });
+    }
   };
 }

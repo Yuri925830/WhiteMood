@@ -7,6 +7,7 @@ const operationalErrors = [
   'service_unavailable', 'microphone_denied', 'microphone_missing', 'audio_unsupported',
   'voice_unavailable', 'network', 'rate_limited', 'provider_error', 'storage_error',
   'summary_failed', 'playback_failed', 'cv_error', 'memory_busy',
+  'cv_image_count', 'cv_image_invalid',
 ];
 
 describe('product language coverage', () => {

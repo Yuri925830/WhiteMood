@@ -1,15 +1,26 @@
 import type { CvObservation } from '../../shared/types';
 
+export interface CvFrame {
+  capturedAt: number;
+  image: Blob;
+}
+
 export interface CvAdapter {
-  /** The adapter owns camera permission and cleanup. Called only after explicit visual-consent toggle. */
+  /** Prepare the current visual input. Live-camera adapters may omit this hook. */
+  setImages?(files: File[]): Promise<number>;
+  /** Activate visual input after explicit user selection or consent. */
   start(context: { signal: AbortSignal; onObservation: (value: CvObservation) => void }): Promise<void>;
   stop(): void | Promise<void>;
+  /** Optional turn-based input for the local analysis service. Returns at most five recent frames. */
+  takeFrames?(): CvFrame[] | Promise<CvFrame[]>;
+  /** Frame-only adapters need the server-side analysis service advertised by /api/health. */
+  requiresAnalysisService?: boolean;
 }
 
 let adapter: CvAdapter | null = null;
 const subscribers = new Set<() => void>();
 
-/** Integration seam for the CV owner; this module never opens a camera itself. */
+/** Integration seam for the CV owner; this module never acquires visual input itself. */
 export function registerCvAdapter(next: CvAdapter): () => void {
   if (adapter) throw new Error('A CV adapter is already registered');
   adapter = next; subscribers.forEach(fn => fn());

@@ -2,6 +2,12 @@
 
 # dependencies
 /node_modules
+__pycache__/
+*.py[cod]
+/.venv-analysis/
+/services/analysis/models/*.onnx
+/services/analysis/models/*.pt
+!/services/analysis/models/README.md
 /.pnp
 .pnp.*
 .yarn/*

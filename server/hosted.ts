@@ -6,6 +6,8 @@ export interface HostedApiEnv {
   GROQ_API_KEY?: string;
   GROQ_CHAT_MODEL?: string;
   GROQ_STT_MODEL?: string;
+  ANALYSIS_API_URL?: string;
+  ANALYSIS_API_TOKEN?: string;
   /** The one external HTTPS origin, if the hosting gateway uses an internal request URL. */
   SITE_ORIGIN?: string;
 }
@@ -14,6 +16,8 @@ interface CachedApi {
   apiKey: string;
   chatModel: string;
   sttModel: string;
+  analysisUrl: string;
+  analysisToken: string;
   siteOrigin: string;
   handle: ReturnType<typeof createApiHandler>;
 }
@@ -44,13 +48,16 @@ export function createHostedApi(): (request: Request, env: HostedApiEnv) => Prom
       const apiKey = env.GROQ_API_KEY?.trim() ?? '';
       const chatModel = env.GROQ_CHAT_MODEL?.trim() || 'openai/gpt-oss-120b';
       const sttModel = env.GROQ_STT_MODEL?.trim() || 'whisper-large-v3-turbo';
+      const analysisUrl = env.ANALYSIS_API_URL?.trim() ?? '';
+      const analysisToken = env.ANALYSIS_API_TOKEN?.trim() ?? '';
       const siteOrigin = externalOrigin(env.SITE_ORIGIN?.trim() ?? '');
 
       if (!cached || cached.apiKey !== apiKey || cached.chatModel !== chatModel
-        || cached.sttModel !== sttModel || cached.siteOrigin !== siteOrigin) {
+        || cached.sttModel !== sttModel || cached.analysisUrl !== analysisUrl
+        || cached.analysisToken !== analysisToken || cached.siteOrigin !== siteOrigin) {
         cached = {
-          apiKey, chatModel, sttModel, siteOrigin,
-          handle: createApiHandler({ apiKey, chatModel, sttModel, allowedOrigins: siteOrigin ? [siteOrigin] : [] }),
+          apiKey, chatModel, sttModel, analysisUrl, analysisToken, siteOrigin,
+          handle: createApiHandler({ apiKey, chatModel, sttModel, analysisUrl, analysisToken, allowedOrigins: siteOrigin ? [siteOrigin] : [] }),
         };
       }
 

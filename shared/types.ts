@@ -22,14 +22,46 @@ export interface VoiceSignals {
   voicedRatio: number;
   meanEnergy: number;
   peakEnergy: number;
+  /** Browser DSP is the fallback; local is produced by the optional analysis service. */
+  source?: 'browser' | 'local';
+  quality?: number;
+  pitchMeanHz?: number;
+  pitchRangeHz?: number;
+  pitchStdHz?: number;
+  pauseCount?: number;
+  pauseDurationMs?: number;
+  maxPauseMs?: number;
 }
 
-/** CV is implemented by the CV owner. These are observations, never diagnostic scores. */
+/** Facial-expression observations are weak cues, never diagnostic scores. */
 export interface CvObservation {
   source: 'face';
   capturedAt: number;
   quality: number;
   features: Record<string, number>;
+}
+
+export type AnalysisModuleState = 'ok' | 'skipped' | 'unavailable' | 'error';
+
+export interface AnalysisModuleStatus {
+  status: AnalysisModuleState;
+  latencyMs: number;
+  confidence?: number;
+}
+
+export interface TurnAnalysis {
+  modules: {
+    stt: AnalysisModuleStatus;
+    acoustics: AnalysisModuleStatus;
+    face: AnalysisModuleStatus;
+  };
+}
+
+export interface TranscriptionResult {
+  text: string;
+  voice?: VoiceSignals;
+  cv?: CvObservation;
+  analysis?: TurnAnalysis;
 }
 
 export interface ChatMessage {
@@ -125,6 +157,7 @@ export interface ServiceHealth {
   configured: boolean;
   provider: 'groq';
   models: { chat: string; stt: string };
+  analysis?: { configured: true; provider: 'local-fastapi' };
 }
 
 export interface ApiErrorBody {

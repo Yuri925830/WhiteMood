@@ -89,11 +89,23 @@ function candidate(value: unknown): MemoryCandidate {
 }
 function voice(value: unknown): VoiceSignals {
   const item = object(value);
-  keys(item, ['durationMs', 'voicedRatio', 'meanEnergy', 'peakEnergy']);
-  return {
+  keys(item, ['durationMs', 'voicedRatio', 'meanEnergy', 'peakEnergy', 'source', 'quality', 'pitchMeanHz', 'pitchRangeHz', 'pitchStdHz', 'pauseCount', 'pauseDurationMs', 'maxPauseMs']);
+  const result: VoiceSignals = {
     durationMs: clamp(item.durationMs, 0, 120_000), voicedRatio: clamp(item.voicedRatio, 0, 1),
     meanEnergy: clamp(item.meanEnergy, 0, 1), peakEnergy: clamp(item.peakEnergy, 0, 1),
   };
+  if (item.source !== undefined) {
+    if (item.source !== 'browser' && item.source !== 'local') return bad();
+    result.source = item.source;
+  }
+  if (item.quality !== undefined) result.quality = clamp(item.quality, 0, 1);
+  if (item.pitchMeanHz !== undefined) result.pitchMeanHz = clamp(item.pitchMeanHz, 40, 2000);
+  if (item.pitchRangeHz !== undefined) result.pitchRangeHz = clamp(item.pitchRangeHz, 0, 2000);
+  if (item.pitchStdHz !== undefined) result.pitchStdHz = clamp(item.pitchStdHz, 0, 2000);
+  if (item.pauseCount !== undefined) result.pauseCount = Math.round(clamp(item.pauseCount, 0, 100));
+  if (item.pauseDurationMs !== undefined) result.pauseDurationMs = Math.round(clamp(item.pauseDurationMs, 0, 120_000));
+  if (item.maxPauseMs !== undefined) result.maxPauseMs = Math.round(clamp(item.maxPauseMs, 0, 120_000));
+  return result;
 }
 function cv(value: unknown): CvObservation {
   const item = object(value);

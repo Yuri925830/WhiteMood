@@ -4,7 +4,7 @@
 
 Cloudflare 部署说明：[DEPLOY_CLOUDFLARE.md](DEPLOY_CLOUDFLARE.md)。
 
-本站使用 Cloudflare Workers、D1 与 WhiteMood 自有账号系统。Pages 提供独立免费入口，通过私有服务绑定接入应用。以云朵为 AI 形象，采用浅蓝与白色的原生 React 界面；CV 仍由张博士负责。
+本站使用 Cloudflare Workers、D1 与 WhiteMood 自有账号系统。Pages 提供独立免费入口，通过私有服务绑定接入应用。以云朵为 AI 形象，采用浅蓝与白色的原生 React 界面；可选 FastAPI 边车提供本地声学与面部表情分析。
 
 ## 部署运行
 
@@ -13,6 +13,7 @@ Cloudflare 部署说明：[DEPLOY_CLOUDFLARE.md](DEPLOY_CLOUDFLARE.md)。
 - `SITE_ORIGIN`：本站唯一 HTTPS origin，无结尾斜杠。
 - `SESSION_SECRET`：服务端匿名 cookie 签名密钥，随机生成后保存在 runtime secret。
 - `GROQ_CHAT_MODEL` / `GROQ_STT_MODEL`：可选模型 ID。
+- `ANALYSIS_API_URL` / `ANALYSIS_API_TOKEN`：可选自托管 FastAPI 分析服务及服务间令牌；未配置时保持原语音链路。
 - 无需 ChatGPT 账号。只用 ID 和密码注册；ID 不区分大小写，数据库唯一约束防止并发重名。
 - 密码使用独立随机盐和 native scrypt（N=32768、r=8、p=3）哈希；数据库不保存明文密码。独立 Cloudflare 版本通过私有 Durable Object 执行计算，适配免费 Worker 的 CPU 限制，未降低哈希安全参数。
 - 账户设置可验证当前密码后修改 ID 或密码；保持 UUID，并撤销旧会话、签发当前新会话。
@@ -48,12 +49,13 @@ pnpm build
 ## 已实现的链路
 
 1. AudioWorklet 持续采集，浏览器本地 VAD 自动分段，输出完整 16 kHz、单声道 PCM WAV。
-2. Groq `whisper-large-v3-turbo` 转写中英韩；本地计算能量、有效发声比例与时长。
-3. Groq `openai/gpt-oss-120b` 结合说话内容、近期上下文、授权记忆和可用辅助信号，返回回复及语音配置。
-4. 浏览器 `speechSynthesis` 自动选择目标语言声音，优先本地；调节语速、音高与句间停顿，继续监听。
-5. 用户插话时取消旧请求和播音。上下文只引用实际播完的句子；过期网络与麦克风回调不会污染新通话。
+2. Groq `whisper-large-v3-turbo` 转写中英韩；浏览器提供基础 VAD 回退，可选 FastAPI 使用 librosa/Silero VAD 提取能量、停顿与基频。
+3. 用户可在通话中选择 2–5 张 JPG、PNG 或 WebP；浏览器去除元数据并缩放成低分辨率 JPEG，在下一次语音话轮交给自托管 FastAPI 的 OpenCV + EmotiEffLib 分析。Groq 不接收这些图片。
+4. Groq `openai/gpt-oss-120b` 结合说话内容、近期上下文、授权记忆和可用弱辅助信号，返回回复及语音配置。
+5. 浏览器 `speechSynthesis` 自动选择目标语言声音，优先本地；调节语速、音高与句间停顿，继续监听。
+6. 用户插话时取消旧请求和播音。上下文只引用实际播完的句子；过期网络与麦克风回调不会污染新通话。
 
-首版是按话轮处理的连续通话，不保证任何外放设备上的人类级全双工表现。声音线索是辅助观测，不是情绪概率、发作诊断或临床评分；当前未提取可靠基频、语速或训练情绪识别模型。
+首版是按话轮处理的连续通话，不保证任何外放设备上的人类级全双工表现。声音与表情线索是辅助观测，不是内心情绪、发作诊断或临床评分；低质量或缺失结果会被省略。
 
 ## 后台记忆
 
@@ -70,7 +72,7 @@ pnpm build
 
 ## 数据与免费额度
 
-应用自身不长期保存原始录音，不采集视频。音频发往 Groq 转写；文字、近期上下文及用户授权的相关记忆发往 Groq 生成。系统“联网”声音可能将 AI 回复文字发给操作系统语音服务商；优先本地声音并不代表所有设备都离线。
+应用自身不长期保存原始录音、所选图片或分析结果。音频发往 Groq 转写；用户选择的 2–5 张图片在浏览器缩放后，只随下一次语音话轮发往所配置的自托管分析服务并立即从前端队列清空。文字、近期上下文及用户授权的相关记忆发往 Groq 生成。系统“联网”声音可能将 AI 回复文字发给操作系统语音服务商；优先本地声音并不代表所有设备都离线。
 
 使用自己账号的免费额度，没有付费自动回退。免费额度、模型和账号可用性以服务商控制台为准，连续通话、长摘要和整合都可能触发限额。应用显示真实 429/网络错误并保留已授权的本地记录。部署前核实账号的数据保留控制；代码不能替用户启用或保证服务商零留存。
 
@@ -81,11 +83,11 @@ pnpm build
 | 位置 | 职责 |
 | --- | --- |
 | `src/audio/`、`public/audio/` | 麦克风、VAD、WAV、播音与打断 |
+| `services/analysis/` | FastAPI、librosa/Silero VAD、OpenCV/EmotiEffLib 本地分析 |
 | `src/core/` | 通话生命周期、取消、上下文与后台任务 |
 | `src/memory/` | 本地记录、摘要、检索及删除约束 |
 | `server/` | 服务端密钥、Groq 调用、输入校验、限额和同源检查 |
 | `src/App.tsx`、`src/i18n.ts` | 原生网页组件与三语界面 |
-| `src/integrations/cv.ts` | 张博士的 CV 接入边界 |
+| `src/integrations/image.ts`、`src/integrations/cv.ts` | 一次性图片输入、预处理与 CV 契约 |
 
-张博士从 [CV 接入说明](docs/CV_HANDOFF.md) 开始；无需改录音与播音模块。当前只取最近有效观测，尚未实现严格音画时序对齐。
-
+部署与字段约束见 [混合多模态框架说明](docs/CV_HANDOFF.md)。当前按用户话轮聚合，尚未实现严格逐帧音画时序对齐。

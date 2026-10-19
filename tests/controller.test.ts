@@ -4,6 +4,7 @@ import type { ConsolidateRequest, ConsolidateResult, Language, RespondRequest, R
 import { WhiteMoodController } from '../src/core/controller';
 import type { ControllerDependencies } from '../src/core/controller';
 import { ApiError } from '../src/core/api';
+import { registerCvAdapter } from '../src/integrations/cv';
 import { MemoryStore } from '../src/memory/store';
 
 function deferred<T>() {
@@ -49,6 +50,28 @@ async function setup(options: { captureStart?: Promise<void>; captureStop?: Prom
 afterEach(() => { controllers.splice(0).forEach(controller => controller.dispose()); vi.unstubAllGlobals(); });
 
 describe('call orchestration uses real lifecycle boundaries', () => {
+  it('queues selected images for one spoken turn and then clears the input state', async () => {
+    const frames = [
+      { image: new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], { type: 'image/jpeg' }), capturedAt: Date.now() },
+      { image: new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], { type: 'image/jpeg' }), capturedAt: Date.now() },
+    ];
+    const adapter = { setImages: vi.fn(async () => 2), start: vi.fn(async () => undefined), stop: vi.fn(), takeFrames: vi.fn(() => frames) };
+    const unregister = registerCvAdapter(adapter);
+    try {
+      const test = await setup(); await test.controller.startCall();
+      await test.controller.setCvImages([
+        new File(['one'], 'one.png', { type: 'image/png' }),
+        new File(['two'], 'two.png', { type: 'image/png' }),
+      ]);
+      expect(test.controller.getSnapshot()).toMatchObject({ cvEnabled: true, cvInputCount: 2 });
+      test.captures[0].callbacks.onUtterance(new Blob(['PCM']), signals); await flush();
+      const transcribeCall = test.api.transcribe.mock.calls[0] as unknown[];
+      expect(transcribeCall[3]).toEqual(frames);
+      expect(test.controller.getSnapshot()).toMatchObject({ cvEnabled: false, cvInputCount: 0 });
+      test.playback[0].resolve(); await flush();
+    } finally { unregister(); }
+  });
+
   it('connects the microphone after a text-first conversation without discarding its messages', async () => {
     const test = await setup();
     const turn = test.controller.sendText('Start with a written thought'); await flush();

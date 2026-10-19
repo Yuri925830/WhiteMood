@@ -1,4 +1,5 @@
-import type { ApiErrorBody, ConsolidateRequest, ConsolidateResult, Language, RespondRequest, RespondResult, ServiceHealth, SummarizeRequest, SummarizeResult } from '../../shared/types';
+import type { ApiErrorBody, ConsolidateRequest, ConsolidateResult, Language, RespondRequest, RespondResult, ServiceHealth, SummarizeRequest, SummarizeResult, TranscriptionResult } from '../../shared/types';
+import type { CvFrame } from '../integrations/cv';
 
 export class ApiError extends Error {
   constructor(public code: string, public retryAfter = 0) { super(code); this.name = 'ApiError'; }
@@ -37,9 +38,13 @@ function json<T>(path: string, body: unknown, signal?: AbortSignal) {
 
 export const api = {
   health: (signal?: AbortSignal) => request<ServiceHealth>('/api/health', { signal }),
-  transcribe: (audio: Blob, language: Language, signal?: AbortSignal) => {
+  transcribe: (audio: Blob, language: Language, signal?: AbortSignal, frames: CvFrame[] = []) => {
     const form = new FormData(); form.append('file', audio, 'utterance.wav'); form.append('language', language);
-    return request<{ text: string }>('/api/transcribe', { method: 'POST', body: form, signal });
+    for (const [index, frame] of frames.slice(-5).entries()) {
+      form.append('frame', frame.image, `frame-${index + 1}.jpg`);
+      form.append('frame_captured_at', String(frame.capturedAt));
+    }
+    return request<TranscriptionResult>('/api/transcribe', { method: 'POST', body: form, signal });
   },
   respond: (body: RespondRequest, signal?: AbortSignal) => json<RespondResult>('/api/respond', body, signal),
   summarize: (body: SummarizeRequest, signal?: AbortSignal) => json<SummarizeResult>('/api/summarize', body, signal),

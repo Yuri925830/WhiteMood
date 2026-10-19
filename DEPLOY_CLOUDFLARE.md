@@ -57,6 +57,8 @@ pnpm exec wrangler deploy --config dist/cloudflare/wrangler.json
 
 `SESSION_SECRET` 使用密码学随机生成的至少 32 字节值。`SITE_ORIGIN` 设置为 `https://whitemood-yuri.pages.dev`，不加末尾 `/`。正式域名变更后同步更新该项。Groq 默认模型为 `openai/gpt-oss-120b` 和 `whisper-large-v3-turbo`；如需更换，可在服务端配置 `GROQ_CHAT_MODEL`、`GROQ_STT_MODEL`。没有付费 AI 自动回退。现有 Worker 的密钥已经设置时，常规代码发布无需重新输入或轮换它们。Pages 只持有内部服务绑定，不复制 Groq 密钥或会话签名密钥。
 
+本地多模态分析默认不随 Cloudflare Worker 部署。若另行部署了可由 Worker 访问的 FastAPI 服务，再额外设置 `ANALYSIS_API_URL`（生产必须为 HTTPS）和 `ANALYSIS_API_TOKEN`；后者必须与分析服务的 `WHITEMOOD_ANALYSIS_TOKEN` 一致。未配置时面部图片入口自动隐藏，语音链路不受影响。不要把本机 `127.0.0.1` 地址配置到线上 Worker，也不要在没有受控 HTTPS 和鉴权时把用户图片发送到公网服务。完整说明见 [混合多模态框架](docs/CV_HANDOFF.md)。
+
 首次 Worker 尚未存在时，`secret put` 可能提示创建 Worker；按真实目标名称完成初始化后再发布。可先执行 `wrangler deploy --dry-run --config dist/cloudflare/wrangler.json` 验证构建和资源打包，该命令不会发布站点。
 
 ## 5. 域名、访问与验收

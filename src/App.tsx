@@ -65,12 +65,18 @@ function Memory({ model, active }: { model: AppModel; active: boolean }) {
   const t = translations[model.settings.language];
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  const [cvBusy, setCvBusy] = useState(false);
+  async function setCvImages(files: File[]) {
+    setCvBusy(true);
+    try { await model.setCvImages(files); }
+    finally { setCvBusy(false); }
+  }
   return <div className="memory-content">
     <p className="modal-intro">{t.memoryIntro}</p>
     <div className="privacy-controls">
       <label className="switch-field"><span><span className="field-title">{t.memory}</span><span className="field-help">{t.memoryHint}</span></span><input type="checkbox" role="switch" checked={model.settings.memoryEnabled} disabled={active && !model.settings.memoryEnabled} onChange={event => model.updateSettings({ memoryEnabled: event.target.checked })} /></label>
       {active && <p className="privacy-hint">{t.memoryLocked}</p>}
-      {model.cvAvailable && <label className="switch-field"><span><span className="field-title">{t.cv}</span><span className="field-help">{t.cvHint}</span></span><input type="checkbox" role="switch" checked={model.cvEnabled} disabled={!active} onChange={event => void model.setCvEnabled(event.target.checked)} /></label>}
+      {model.cvAvailable && <div className="image-input-field"><div><span className="field-title">{t.cv}</span><span className="field-help">{t.cvHint}</span></div><div className="image-input-actions"><div className="inline-actions"><label className={`small-button file-button ${!active || cvBusy ? 'is-disabled' : ''}`}>{t.cvChoose}<input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple disabled={!active || cvBusy} onChange={event => { const files = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = ''; void setCvImages(files); }} /></label>{model.cvInputCount > 0 && <button className="text-button" type="button" disabled={cvBusy} onClick={() => void setCvImages([])}>{t.cvClear}</button>}</div><span className="image-input-status" role="status">{cvBusy ? t.cvPreparing : model.cvInputCount > 0 ? t.cvReady.replace('{count}', String(model.cvInputCount)) : active ? t.cvEmpty : t.cvCallOnly}</span></div></div>}
       <div className="privacy-details"><p>{t.processingNotice}</p><p>{t.voicePrivacy}</p></div>
     </div>
     {model.memoryBusy && <p className="memory-status-note" role="status">{t.memoryBusy}</p>}

@@ -3,6 +3,8 @@ declare namespace Cloudflare {
     GROQ_API_KEY?: string;
     GROQ_CHAT_MODEL?: string;
     GROQ_STT_MODEL?: string;
+    ANALYSIS_API_URL?: string;
+    ANALYSIS_API_TOKEN?: string;
     SITE_ORIGIN?: string;
     SESSION_SECRET?: string;
     ASSETS?: Fetcher;

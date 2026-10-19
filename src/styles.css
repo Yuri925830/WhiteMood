@@ -187,6 +187,14 @@ html[lang='zh'] h1, html[lang='ko'] h1 { letter-spacing: -.6px; font-size: clamp
 .privacy-controls { border: 1px solid var(--line); border-radius: 13px; padding: 0 19px 15px; background: #f1f8fd; }
 .privacy-controls .switch-field:first-child { border-top: 0; }
 .privacy-controls .switch-field { gap: 22px; }
+.image-input-field { display: flex; gap: 22px; align-items: center; padding: 21px 0; border-top: 1px solid var(--line); }
+.image-input-field > div:first-child { flex: 1; }
+.image-input-field .field-help { margin-top: 6px; }
+.image-input-actions { display: grid; justify-items: end; gap: 7px; flex-shrink: 0; }
+.file-button { display: inline-flex; cursor: pointer; }
+.file-button:focus-within { outline: 2px solid var(--blue); outline-offset: 2px; }
+.file-button.is-disabled { opacity: .5; cursor: not-allowed; }
+.image-input-status { max-width: 210px; color: var(--muted); font-size: 10px; line-height: 1.45; text-align: right; }
 .privacy-details { border-top: 1px solid var(--line); padding-top: 9px; }
 .privacy-details p { color: var(--muted); font-size: 10px; line-height: 1.85; margin: 8px 0 0; }
 .privacy-hint { font-size: 10px; line-height: 1.8; color: var(--muted); margin: -8px 0 15px; }
@@ -310,6 +318,9 @@ html[lang='zh'] h1, html[lang='ko'] h1 { letter-spacing: -.6px; font-size: clamp
   .modal { border-radius: 19px; padding: 25px 22px; max-height: calc(100svh - 32px); }
   .modal-heading h2 { font-size: 21px; }
   .modal-intro { font-size: 11px; }
+  .image-input-field { align-items: flex-start; flex-direction: column; }
+  .image-input-actions { justify-items: start; width: 100%; }
+  .image-input-status { max-width: none; text-align: left; }
   .memory-items { grid-template-columns: 1fr; }
   .session-card { padding: 16px; }
   .edit-memory-form > textarea { font-size: 16px; }

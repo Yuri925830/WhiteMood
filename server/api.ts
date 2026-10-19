@@ -7,11 +7,16 @@ import {
   consolidatePrompt, consolidateSchema, responsePrompt, responseSchema,
   summarizeSchema, summaryPrompt,
 } from './prompts';
+import { createAnalysisClient, type AnalysisFrame } from './analysis';
 
 export interface ApiConfig {
   apiKey?: string;
   chatModel?: string;
   sttModel?: string;
+  /** Optional FastAPI service for local acoustic and facial-expression analysis. */
+  analysisUrl?: string;
+  analysisToken?: string;
+  analysisTimeoutMs?: number;
   /** Exact browser origins in addition to the request's origin. Never use '*'. */
   allowedOrigins?: string[];
   timeoutMs?: number;
@@ -28,14 +33,16 @@ export interface ApiContext {
 }
 export const MAX_JSON_BYTES = 256 * 1024;
 export const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
-export const MAX_MULTIPART_BYTES = MAX_AUDIO_BYTES + 16 * 1024;
+export const MAX_FRAME_BYTES = 256 * 1024;
+export const MAX_FRAMES = 5;
+export const MAX_MULTIPART_BYTES = MAX_AUDIO_BYTES + MAX_FRAME_BYTES * MAX_FRAMES + 64 * 1024;
 
 export const SECURITY_HEADERS: Record<string, string> = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
   'Cache-Control': 'no-store',
   'Cross-Origin-Resource-Policy': 'same-origin',
-  'Permissions-Policy': 'camera=(self), microphone=(self), geolocation=()',
+  'Permissions-Policy': 'camera=(), microphone=(self), geolocation=()',
 };
 
 function json(value: unknown, status = 200, extra: Record<string, string> = {}): Response {
@@ -129,6 +136,10 @@ function validWav(bytes: Uint8Array): boolean {
   return fmt && data && dataBytes / bytesPerSecond <= 120 && offset === bytes.length;
 }
 
+function validJpeg(bytes: Uint8Array): boolean {
+  return bytes.byteLength >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes.at(-2) === 0xff && bytes.at(-1) === 0xd9;
+}
+
 function retryAfter(value: string | null, now: number): number {
   if (!value) return 30;
   const seconds = Number(value);
@@ -155,6 +166,7 @@ export function createApiHandler(config: ApiConfig = {}, deps: ApiDependencies =
     if (!['http:', 'https:'].includes(url.protocol) || url.origin !== value) throw new Error('Allowed origins must be exact HTTP origins.');
     return value;
   }));
+  const analysis = createAnalysisClient({ url: config.analysisUrl, token: config.analysisToken, timeoutMs: config.analysisTimeoutMs }, providerFetch, now);
 
   function limit(context: ApiContext) {
     // Node uses socket.remoteAddress. Workers must use their trusted runtime-provided IP.
@@ -250,7 +262,10 @@ export function createApiHandler(config: ApiConfig = {}, deps: ApiDependencies =
         return json({ error: { code: 'METHOD_NOT_ALLOWED', message: 'This method is not supported.' } }, 405, { Allow: path === '/api/health' ? 'GET' : 'POST' });
       }
       if (path === '/api/health') {
-        const health: ServiceHealth = { configured: Boolean(apiKey), provider: 'groq', models: { chat: chatModel, stt: sttModel } };
+        const health: ServiceHealth = {
+          configured: Boolean(apiKey), provider: 'groq', models: { chat: chatModel, stt: sttModel },
+          ...(analysis.configured ? { analysis: { configured: true as const, provider: 'local-fastapi' as const } } : {}),
+        };
         return json(health);
       }
       limit(context);
@@ -263,8 +278,9 @@ export function createApiHandler(config: ApiConfig = {}, deps: ApiDependencies =
         let form: FormData;
         try { form = await new Response(bytes, { headers: { 'Content-Type': type } }).formData(); }
         catch { throw new ApiFailure(400, 'INVALID_REQUEST', 'The audio upload could not be read.'); }
-        if ([...form.keys()].some(key => key !== 'file' && key !== 'language') || form.getAll('file').length !== 1 || form.getAll('language').length !== 1) {
-          throw new ApiFailure(400, 'INVALID_REQUEST', 'Provide one WAV file and one language.');
+        const allowed = new Set(['file', 'language', 'frame', 'frame_captured_at']);
+        if ([...form.keys()].some(key => !allowed.has(key)) || form.getAll('file').length !== 1 || form.getAll('language').length !== 1) {
+          throw new ApiFailure(400, 'INVALID_REQUEST', 'Provide one WAV file, one language and optional face images.');
         }
         const file = form.get('file');
         const lang = language(form.get('language'));
@@ -272,6 +288,24 @@ export function createApiHandler(config: ApiConfig = {}, deps: ApiDependencies =
           throw new ApiFailure(400, 'INVALID_AUDIO', 'Provide a mono 16-bit PCM WAV file of at most 8 MB.');
         }
         if (!validWav(new Uint8Array(await file.arrayBuffer()))) throw new ApiFailure(400, 'INVALID_AUDIO', 'The WAV audio format is invalid.');
+        const rawFrames = form.getAll('frame');
+        const rawCapturedAt = form.getAll('frame_captured_at');
+        if (rawFrames.length !== rawCapturedAt.length || rawFrames.length === 1 || rawFrames.length > MAX_FRAMES) {
+          throw new ApiFailure(400, 'INVALID_FRAMES', 'Provide two to five matching JPEG face images, or no images.');
+        }
+        const requestTime = now();
+        const frames: AnalysisFrame[] = [];
+        for (let index = 0; index < rawFrames.length; index++) {
+          const frame = rawFrames[index]; const time = rawCapturedAt[index];
+          if (!(frame instanceof Blob) || frame.type !== 'image/jpeg' || frame.size > MAX_FRAME_BYTES || typeof time !== 'string' || !/^\d{10,16}$/.test(time)) {
+            throw new ApiFailure(400, 'INVALID_FRAMES', 'Face inputs must be bounded JPEG images with submission timestamps.');
+          }
+          const capturedAt = Number(time);
+          if (!Number.isSafeInteger(capturedAt) || capturedAt < requestTime - 30_000 || capturedAt > requestTime + 1000 || !validJpeg(new Uint8Array(await frame.arrayBuffer()))) {
+            throw new ApiFailure(400, 'INVALID_FRAMES', 'A face image or submission timestamp is invalid.');
+          }
+          frames.push({ image: frame, capturedAt });
+        }
         const upload = new FormData();
         // Strip the original user filename; audio is held in memory only and never written to disk.
         upload.set('file', file, 'utterance.wav');
@@ -279,9 +313,33 @@ export function createApiHandler(config: ApiConfig = {}, deps: ApiDependencies =
         upload.set('model', sttModel);
         upload.set('response_format', 'json');
         upload.set('temperature', '0');
-        const result = await provider('/audio/transcriptions', { method: 'POST', body: upload }, request);
-        try { return json({ text: string(object(result).text, 12_000, true) }); }
-        catch { throw new ApiFailure(502, 'INVALID_PROVIDER_RESPONSE', 'The AI service returned an invalid transcription.'); }
+        const analysisAbort = new AbortController();
+        const abortAnalysis = () => analysisAbort.abort(); request.signal.addEventListener('abort', abortAnalysis, { once: true });
+        const analyzed = analysis.analyze(file, frames, analysisAbort.signal);
+        const startedAt = now();
+        let sttLatencyMs = 0;
+        let result: unknown;
+        try {
+          result = await provider('/audio/transcriptions', { method: 'POST', body: upload }, request);
+          sttLatencyMs = Math.max(0, Math.round(now() - startedAt));
+        }
+        catch (error) { analysisAbort.abort(); request.signal.removeEventListener('abort', abortAnalysis); void analyzed; throw error; }
+        try {
+          const text = string(object(result).text, 12_000, true);
+          const local = await analyzed;
+          if (request.signal.aborted) throw new ApiFailure(499, 'REQUEST_ABORTED', 'The request was cancelled.');
+          const includeAnalysis = analysis.configured || frames.length > 0;
+          return json({
+            text, ...(local.voice ? { voice: local.voice } : {}), ...(local.cv ? { cv: local.cv } : {}),
+            ...(includeAnalysis ? { analysis: { modules: { stt: { status: 'ok', latencyMs: sttLatencyMs }, ...local.analysis.modules } } } : {}),
+          });
+        }
+        catch (error) {
+          analysisAbort.abort();
+          if (error instanceof ApiFailure && error.code === 'REQUEST_ABORTED') throw error;
+          throw new ApiFailure(502, 'INVALID_PROVIDER_RESPONSE', 'The AI service returned an invalid transcription.');
+        }
+        finally { request.signal.removeEventListener('abort', abortAnalysis); }
       }
 
       const input = await readJson(request);

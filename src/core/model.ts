@@ -16,6 +16,7 @@ export interface AppModel {
   availableVoices: Array<{ id: string; name: string; local: boolean }>;
   cvAvailable: boolean;
   cvEnabled: boolean;
+  cvInputCount: number;
   updateSettings: (next: Partial<UserSettings>) => void;
   setLanguage: (language: Language) => void;
   startCall: () => Promise<void>;
@@ -30,6 +31,7 @@ export interface AppModel {
   clearAllMemory: () => Promise<void>;
   retrySummary: (id: string) => Promise<void>;
   setCvEnabled: (enabled: boolean) => Promise<void>;
+  setCvImages: (files: File[]) => Promise<void>;
   refreshService: () => Promise<void>;
   clearError: () => void;
 }

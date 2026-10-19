@@ -17,6 +17,8 @@ const handler = createApiHandler({
   apiKey: process.env.GROQ_API_KEY,
   chatModel: process.env.GROQ_CHAT_MODEL,
   sttModel: process.env.GROQ_STT_MODEL,
+  analysisUrl: process.env.ANALYSIS_API_URL,
+  analysisToken: process.env.ANALYSIS_API_TOKEN,
   allowedOrigins,
 });
 

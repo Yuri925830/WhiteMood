@@ -1,0 +1,10 @@
+fastapi>=0.115,<1
+uvicorn>=0.34,<1
+python-multipart>=0.0.20,<1
+numpy>=1.26,<3
+librosa>=0.11,<1
+silero-vad>=6.2,<7
+torch>=2.2,<3
+emotiefflib==1.1.1
+opencv-python>=4.10,<5
+Pillow>=10,<13
